@@ -175,9 +175,6 @@ class QConvBN2d(ConvBN2d):
 
         # batch norm statistics
         if self.training:
-            weight = self.WQ(self.weight)
-            input = self.AQ(input)
-
             out_ = F.conv2d(input, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
             batch_mean = out_.mean([0,2,3])
