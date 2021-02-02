@@ -1,4 +1,4 @@
-PYTHON="/home/mengjian/anaconda3/envs/neurosim_test/bin/python3"
+PYTHON="/home/jmeng15/anaconda3/envs/neurosim_test/bin/python3"
 
 ############ directory to save result #############
 

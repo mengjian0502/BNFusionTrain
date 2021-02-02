@@ -48,32 +48,34 @@ class ConvBN2d(nn.Conv2d):
         # BN param
         self.eps = eps
         self.num_features = self.weight.data.size(0)
-        self.gamma = Parameter(torch.empty(self.num_features))
-        self.beta = Parameter(torch.empty(self.num_features))
+        self.gamma = nn.Parameter(torch.empty(self.num_features))
+        self.beta = nn.Parameter(torch.empty(self.num_features))
         self.register_buffer('running_mean', torch.zeros(self.num_features))
         self.register_buffer('running_var', torch.ones(self.num_features))
 
         self.momentum=momentum
         self.track_running_stats = track_running_stats
-        self.register_buffer("num_batches_tracked", torch.tenosr(0))
+        self.register_buffer("num_batches_tracked", torch.tensor(0))
 
-    def reset_running_stats(self):
-        self.running_mean.zero_()
-        self.running_var.fill_(1)
-    
-    def reset_parameters(self):
-        self.reset_running_stats()
-        init.uniform_(self.gamma)
-        init.zeros_(self.beta)
+    #def reset_running_stats(self):
+    #    self.running_mean.zero_()
+    #    self.running_var.fill_(1)
+    #
+    #def reset_parameters(self):
+    #    self.reset_running_stats()
+    #    init.uniform_(self.gamma)
+    #    init.zeros_(self.beta)
 
     def forward(self, input):
         batchsize, channels, height, width = input.size()
         
         # batch norm statistics
         if self.training:
-            mean = input.mean([0,2,3])
-            var = input.var([0,2,3], unbiased=False)
-            n = input.numel() / input.size(1)
+            out_ = F.conv2d(input, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+
+            mean = out_.mean([0,2,3])
+            var = out_.var([0,2,3], unbiased=False)
+            n = out_.numel() / out_.size(1)
 
             with torch.no_grad():
                 self.running_mean = self.momentum * mean + (1 - self.momentum) * self.running_mean
@@ -90,5 +92,5 @@ class ConvBN2d(nn.Conv2d):
         weight = self.weight * bn_scale[:, None, None, None]
 
         # convolution
-        out = F.conv2d(input, weight, weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        out = F.conv2d(input, weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
         return out
