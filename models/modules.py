@@ -57,40 +57,37 @@ class ConvBN2d(nn.Conv2d):
         self.track_running_stats = track_running_stats
         self.register_buffer("num_batches_tracked", torch.tensor(0))
 
-    #def reset_running_stats(self):
-    #    self.running_mean.zero_()
-    #    self.running_var.fill_(1)
-    #
-    #def reset_parameters(self):
-    #    self.reset_running_stats()
-    #    init.uniform_(self.gamma)
-    #    init.zeros_(self.beta)
-
     def forward(self, input):
-        batchsize, channels, height, width = input.size()
-        
+        def reshape_to_activation(inputs):
+            return inputs.reshape(1, -1, 1, 1)
+
         # batch norm statistics
         if self.training:
             out_ = F.conv2d(input, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
-            mean = out_.mean([0,2,3])
-            var = out_.var([0,2,3], unbiased=False)
-            n = out_.numel() / out_.size(1)
+            batch_mean = out_.mean([0,2,3])
+            batch_var = out_.var([0,2,3])
+            batch_std = torch.sqrt(batch_var + self.eps)
 
             with torch.no_grad():
-                self.running_mean = self.momentum * mean + (1 - self.momentum) * self.running_mean
-                self.running_var = self.momentum * var * n/(n-1) + (1 - self.momentum) * self.running_var
-        else:
-            mean = self.running_mean
-            var = self.running_var
+                self.running_mean = self.momentum * batch_mean + (1 - self.momentum) * self.running_mean
+                self.running_var = self.momentum * batch_var  + (1 - self.momentum) * self.running_var
         
-        std = torch.sqrt(var + self.eps)
-        bn_scale = self.gamma / std
-        bn_bias = self.beta + mean / std
+        running_mean = self.running_mean
+        running_var = self.running_var
+        running_std = torch.sqrt(running_var + self.eps)
+
+        bn_scale = self.gamma / running_std
+        bias = self.beta -  self.gamma * running_mean / running_std
+        bn_bias = bias.reshape(-1)
         
         # merge the BN weight to the weight
         weight = self.weight * bn_scale[:, None, None, None]
 
         # convolution
-        out = F.conv2d(input, weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        out = F.conv2d(input, weight, bn_bias, self.stride, self.padding, self.dilation, self.groups)
+
+        if self.training:
+            out *= reshape_to_activation(running_std / batch_std)
+            out += reshape_to_activation(self.gamma * (running_mean / running_std - batch_mean / batch_std))
         return out
