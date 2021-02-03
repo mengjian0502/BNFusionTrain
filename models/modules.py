@@ -18,8 +18,10 @@ from collections import OrderedDict
 class WeightQuant(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, scale):
-        output_int = input.mul(scale[:, None, None, None]).round()
-        output_float = output_int.div(scale[:, None, None, None])
+        output_int = input.mul(scale).round()
+        output_float = output_int.div(scale)
+        #if output_float.size(1) == 64:
+        #    import pdb;pdb.set_trace()
         return output_float
 
     @staticmethod
@@ -42,21 +44,23 @@ class WQ(nn.Module):
     def __init__(self, wbit, num_features):
         super(WQ, self).__init__()
         self.wbit = wbit
-        self.register_buffer('alpha_w', torch.ones(num_features))
+        self.register_buffer('alpha_w', torch.tensor(1.))
 
     def forward(self, input):
         z_typical = {'4bit': [0.077, 1.013], '8bit':[0.027, 1.114]}
         z = z_typical[f'{int(self.wbit)}bit']
-
-        m = input.mean([1,2,3])
-        std = input.std([1,2,3])
+        
+        m = input.abs().mean()
+        std = input.std()
         
         self.alpha_w = 1/z[0] * std - z[1]/z[0] * m # channel-wise floating point clipping boundary
         n_lv = 2 ** (self.wbit - 1) - 1
 
+        input = input.clamp(-self.alpha_w.item(), self.alpha_w.item())
+
         scale = n_lv / self.alpha_w
         zero_point = torch.zeros_like(scale)
-        
+
         w_float = WeightQuant.apply(input, scale)
         return w_float
 
@@ -175,10 +179,12 @@ class QConvBN2d(ConvBN2d):
 
         # batch norm statistics
         if self.training:
-            out_ = F.conv2d(input, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+            weight = self.WQ(self.weight)
+            input = self.AQ(input)
+            out = F.conv2d(input, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
-            batch_mean = out_.mean([0,2,3])
-            batch_var = out_.var([0,2,3])
+            batch_mean = out.mean([0,2,3])
+            batch_var = out.var([0,2,3])
             batch_std = torch.sqrt(batch_var + self.eps)
 
             with torch.no_grad():
@@ -195,11 +201,11 @@ class QConvBN2d(ConvBN2d):
         
         # merge the BN weight to the weight
         weight = self.weight * bn_scale[:, None, None, None]
-        weight = self.WQ(weight)
-        input = self.AQ(input)
+        weight_q = self.WQ(weight)
+        input_q = self.AQ(input)
 
         # convolution
-        out = F.conv2d(input, weight, bn_bias, self.stride, self.padding, self.dilation, self.groups)
+        out = F.conv2d(input_q, weight_q, bn_bias, self.stride, self.padding, self.dilation, self.groups)
 
         if self.training:
             out *= reshape_to_activation(running_std / batch_std)
