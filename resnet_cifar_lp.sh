@@ -16,7 +16,7 @@ optimizer=SGD
 wd=0.0005
 lr=0.1
 
-save_path="./save/${model}/${model}_lr${lr}_wd${wd}/"
+save_path="./save/${model}/${model}_lr${lr}_wd${wd}_QHardTanh/"
 log_file="${model}_lr${lr}_wd${wd}.log"
 
 $PYTHON -W ignore train.py --dataset ${dataset} \

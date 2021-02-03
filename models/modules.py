@@ -27,7 +27,7 @@ class WeightQuant(torch.autograd.Function):
     def backward(ctx, grad_output):
         return grad_output, None
 
-class FMQuant(torch.autograd.Function):
+class RoundQuant(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, scale):
         output_int = input.mul(scale).round()
@@ -40,33 +40,40 @@ class FMQuant(torch.autograd.Function):
 
 
 class WQ(nn.Module):
-    def __init__(self, wbit, num_features):
+    def __init__(self, wbit, num_features, channel_wise=True):
         super(WQ, self).__init__()
         self.wbit = wbit
         self.num_features = num_features
         self.register_buffer('alpha_w', torch.ones(num_features))
+        self.channel_wise = channel_wise
 
     def forward(self, input):
         z_typical = {'4bit': [0.077, 1.013], '8bit':[0.027, 1.114]}
         z = z_typical[f'{int(self.wbit)}bit']
-        
-        m = input.abs().mean([1,2,3])
-        std = input.std([1,2,3])
-        
-        self.alpha_w = 1/z[0] * std - z[1]/z[0] * m # channel-wise floating point clipping boundary
         n_lv = 2 ** (self.wbit - 1) - 1
-        # input = input.clamp(-self.alpha_w.item(), self.alpha_w.item())
-        
-        lb = self.alpha_w.mul(-1.)
-        ub = self.alpha_w
 
-        # channel-wise clamp
-        input = torch.max(torch.min(input, ub[:,None,None,None]), lb[:,None,None,None])
+        if self.channel_wise:
+            m = input.abs().mean([1,2,3])
+            std = input.std([1,2,3])
+            
+            self.alpha_w = 1/z[0] * std - z[1]/z[0] * m
+            lb = self.alpha_w.mul(-1.)
+            ub = self.alpha_w
 
-        scale = n_lv / self.alpha_w
-        zero_point = torch.zeros_like(scale)
+            # channel-wise clamp
+            input = torch.max(torch.min(input, ub[:,None,None,None]), lb[:,None,None,None])
+            scale = n_lv / self.alpha_w
 
-        w_float = WeightQuant.apply(input, scale)
+            w_float = WeightQuant.apply(input, scale)
+        else:
+            m = input.abs().mean()
+            std = input.std()
+            
+            self.alpha_w = 1/z[0] * std - z[1]/z[0] * m 
+            input = input.clamp(-self.alpha_w.item(), self.alpha_w.item())
+            scale = n_lv / self.alpha_w
+
+            w_float = RoundQuant.apply(input, scale)
         return w_float
 
 class AQ(nn.Module):
@@ -82,7 +89,27 @@ class AQ(nn.Module):
             n_lv = 2**self.abit - 1
             scale = n_lv / self.alpha
 
-            a_float = FMQuant.apply(input, scale)
+            a_float = RoundQuant.apply(input, scale)
+        else:
+            a_float = input
+        return a_float
+
+class AQ_Symm(nn.Module):
+    r"""
+    Quantization function for Hardtanh
+    """
+    def __init__(self, abit, num_features):
+        super(AQ_Symm, self).__init__()
+        self.abit = abit
+    
+    def forward(self, input):
+        if input.size(1) > 3:
+            lb = input.min().item()
+            ub = input.max().item()
+
+            n_lv = 2 ** (self.abit - 1) - 1
+            scale = n_lv / ub
+            a_float = RoundQuant.apply(input, scale)
         else:
             a_float = input
         return a_float
@@ -175,7 +202,7 @@ class QConvBN2d(ConvBN2d):
 
         # quantizers
         self.WQ = WQ(wbit=wbit, num_features=channels)
-        self.AQ = AQ(abit=abit, num_features=channels, alpha_init=alpha_init)
+        self.AQ = AQ_Symm(abit=abit, num_features=channels)
 
 
     def forward(self, input):
@@ -208,13 +235,38 @@ class QConvBN2d(ConvBN2d):
         weight = self.weight * bn_scale[:, None, None, None]
         weight_q = self.WQ(weight)
         input_q = self.AQ(input)
-
+        
         # convolution
         out = F.conv2d(input_q, weight_q, bn_bias, self.stride, self.padding, self.dilation, self.groups)
 
         if self.training:
             out *= reshape_to_activation(running_std / batch_std)
             out += reshape_to_activation(self.gamma * (running_mean / running_std - batch_mean / batch_std))
+        return out
+
+
+class QLinear(nn.Linear):
+    r"""
+    Fully connected layer with Quantized weight
+    """
+    def __init__(self, in_features, out_features, bias=True, wbit=4, abit=4, alpha_init=10.0):
+        super(QLinear, self).__init__(in_features=in_features, out_features=out_features, bias=bias)
+        
+        # precisions
+        self.wbit = wbit
+        self.abit = abit
+        self.alpha_init = alpha_init
+        channels = self.weight.data.size(0)
+
+        # quantizers
+        self.WQ = WQ(wbit=wbit, num_features=channels, channel_wise=False)
+        self.AQ = AQ_Symm(abit=abit, num_features=channels)
+
+    def forward(self, input):
+        weight_q = self.WQ(self.weight)
+        input_q = self.AQ(input)
+
+        out = F.linear(input_q, weight_q, self.bias)
         return out
 
 
