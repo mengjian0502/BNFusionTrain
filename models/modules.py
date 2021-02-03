@@ -18,10 +18,9 @@ from collections import OrderedDict
 class WeightQuant(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, scale):
-        output_int = input.mul(scale).round()
-        output_float = output_int.div(scale)
-        #if output_float.size(1) == 64:
-        #    import pdb;pdb.set_trace()
+        output_int = input.mul(scale[:,None,None,None]).round()
+        output_float = output_int.div(scale[:,None,None,None])
+
         return output_float
 
     @staticmethod
@@ -44,19 +43,25 @@ class WQ(nn.Module):
     def __init__(self, wbit, num_features):
         super(WQ, self).__init__()
         self.wbit = wbit
-        self.register_buffer('alpha_w', torch.tensor(1.))
+        self.num_features = num_features
+        self.register_buffer('alpha_w', torch.ones(num_features))
 
     def forward(self, input):
         z_typical = {'4bit': [0.077, 1.013], '8bit':[0.027, 1.114]}
         z = z_typical[f'{int(self.wbit)}bit']
         
-        m = input.abs().mean()
-        std = input.std()
+        m = input.abs().mean([1,2,3])
+        std = input.std([1,2,3])
         
         self.alpha_w = 1/z[0] * std - z[1]/z[0] * m # channel-wise floating point clipping boundary
         n_lv = 2 ** (self.wbit - 1) - 1
+        # input = input.clamp(-self.alpha_w.item(), self.alpha_w.item())
+        
+        lb = self.alpha_w.mul(-1.)
+        ub = self.alpha_w
 
-        input = input.clamp(-self.alpha_w.item(), self.alpha_w.item())
+        # channel-wise clamp
+        input = torch.max(torch.min(input, ub[:,None,None,None]), lb[:,None,None,None])
 
         scale = n_lv / self.alpha_w
         zero_point = torch.zeros_like(scale)
