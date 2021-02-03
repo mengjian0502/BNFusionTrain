@@ -202,7 +202,7 @@ class QConvBN2d(ConvBN2d):
 
         # quantizers
         self.WQ = WQ(wbit=wbit, num_features=channels)
-        self.AQ = AQ_Symm(abit=abit, num_features=channels)
+        self.AQ = AQ(abit=abit, num_features=channels, alpha_init=alpha_init)
 
 
     def forward(self, input):
@@ -260,7 +260,7 @@ class QLinear(nn.Linear):
 
         # quantizers
         self.WQ = WQ(wbit=wbit, num_features=channels, channel_wise=False)
-        self.AQ = AQ_Symm(abit=abit, num_features=channels)
+        self.AQ = AQ(abit=abit, num_features=channels, alpha_init=alpha_init)
 
     def forward(self, input):
         weight_q = self.WQ(self.weight)
