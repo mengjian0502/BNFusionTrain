@@ -101,14 +101,14 @@ class AQ_Symm(nn.Module):
     def __init__(self, abit, num_features):
         super(AQ_Symm, self).__init__()
         self.abit = abit
+        self.alpha = torch.tensor(1.0).cuda()
     
     def forward(self, input):
         if input.size(1) > 3:
-            lb = input.min().item()
-            ub = input.max().item()
-
-            n_lv = 2 ** (self.abit - 1) - 1
-            scale = n_lv / ub
+            
+            with torch.no_grad():
+                n_lv = 2 ** (self.abit - 1) - 1
+                scale = n_lv / self.alpha
             a_float = RoundQuant.apply(input, scale)
         else:
             a_float = input

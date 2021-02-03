@@ -28,12 +28,12 @@ class ResNetBasicblock(nn.Module):
   def __init__(self, inplanes, planes, stride=1, downsample=None):
     super(ResNetBasicblock, self).__init__()   
     self.conv_a = QConvBN2d(inplanes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
-    self.relu1 = nn.ReLU(inplace=True)
-    # self.relu1 = nn.Hardtanh(min_val=-1.0, max_val=1.0, inplace=False)
+    # self.relu1 = nn.ReLU(inplace=True)
+    self.relu1 = nn.Hardtanh(min_val=-1.0, max_val=1.0, inplace=False)
 
     self.conv_b = QConvBN2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False) 
-    self.relu2 = nn.ReLU(inplace=True)
-    # self.relu2 = nn.Hardtanh(min_val=-1.0, max_val=1.0, inplace=False)
+    # self.relu2 = nn.ReLU(inplace=True)
+    self.relu2 = nn.Hardtanh(min_val=-1.0, max_val=1.0, inplace=False)
     self.downsample = downsample
 
   def forward(self, x):
@@ -72,8 +72,8 @@ class CifarResNet(nn.Module):
     print ('CifarResNet : Depth : {} , Layers for each block : {}'.format(depth, layer_blocks))
     self.num_classes = num_classes
     self.conv_1_3x3 = QConvBN2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)  
-    self.relu0 = nn.ReLU(inplace=True)
-    # self.relu0 = nn.Hardtanh(min_val=-1.0, max_val=1.0, inplace=False)
+    # self.relu0 = nn.ReLU(inplace=True)
+    self.relu0 = nn.Hardtanh(min_val=-1.0, max_val=1.0, inplace=False)
 
     self.inplanes = 16
     self.stage_1 = self._make_layer(block, 16, layer_blocks, 1)

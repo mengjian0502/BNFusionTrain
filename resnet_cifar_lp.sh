@@ -29,8 +29,6 @@ $PYTHON -W ignore train.py --dataset ${dataset} \
     --schedule 60 120 \
     --gammas 0.1 0.1 \
     --batch_size ${batch_size} \
-    --clp \
-    --a_lambda ${wd} \
     --ngpu 1 \
     --wd ${wd} \
 
