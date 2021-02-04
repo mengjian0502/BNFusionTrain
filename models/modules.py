@@ -1,5 +1,5 @@
 """
-PROFIT quantization with merged modules
+DNN quantization with merged modules
 """
 
 from __future__ import absolute_import
