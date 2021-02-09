@@ -344,8 +344,8 @@ class QConv2d(nn.Conv2d):
         self.wbit = wbit
         num_features = self.weight.data.size(0)
 
-        self.WQ = WQPROFIT(wbit, num_features, channel_wise=False)
-        self.AQ = PROFITAQ(abit)
+        self.WQ = WQ(wbit, num_features)
+        self.AQ = AQ_Symm(abit, num_features)
     
     def _update_param(self, wbit, abit):
         self.WQ.wbit = wbit
@@ -374,7 +374,7 @@ class QLinear(nn.Linear):
 
         # quantizers
         self.WQ = WQ(wbit=wbit, num_features=channels, channel_wise=False)
-        self.AQ = AQ(abit=abit, num_features=channels, alpha_init=alpha_init)
+        self.AQ = AQ_Symm(abit=abit, num_features=channels)
 
     def forward(self, input):
         weight_q = self.WQ(self.weight)
