@@ -20,7 +20,6 @@ class WeightQuant(torch.autograd.Function):
     def forward(ctx, input, scale):
         output_int = input.mul(scale[:,None,None,None]).round()
         output_float = output_int.div(scale[:,None,None,None])
-
         return output_float
 
     @staticmethod
@@ -38,6 +37,52 @@ class RoundQuant(torch.autograd.Function):
     def backward(ctx, grad_output):
         return grad_output, None
 
+class WQPROFIT(nn.Module):
+    def __init__(self, wbit, num_features, channel_wise):
+        self.wbit = wbit
+        self.num_features = num_features
+        self.channel_wise
+        
+        # learnable parameters
+        if channel_wise:
+            self.a = nn.Parameter(torch.ones(num_features))
+            self.c = nn.Parameter(torch.ones(num_features))
+        else:
+            self.a = nn.Parameter(torch.Tensor(1.))
+            self.c = nn.Parameter(torch.Tensor(1.))
+
+    def _upadte_param(self, wbit):
+        self.wbit = wbit
+        max_val = self.weight.data.abs().max().item()
+        self.a.data.fill_(np.log(np.exp(max_val * 0.9)-1))
+        self.c.data.fill_(np.log(np.exp(max_val * 0.9)-1))
+
+    def forward(self, input):
+        if self.wbit == 32:
+            input_q = input
+        else:
+            n_lv = 2 ** self.wbit
+            scale = n_lv // 2 - 1
+            
+            # gradient friendly
+            a = F.softplus(self.a)  # keep the learnable value positive
+            c = F.softplus(self.c)
+
+            
+            if self.channel_wise:
+                input = input.div(a[:, None, None, None])
+                input = F.hardtanh(input, -1, 1)
+
+                scale = torch.ones_like(self.a.data).mul(scale)
+                input_q = WeightQuant.apply(input, scale)
+                input_q = input_q.mul(c[:,None,None,None])
+            else:
+                input = input.div(a)
+                input = F.hardtanh(input, -1, 1)
+
+                input_q = RoundQuant.apply(input, scale)
+                input_q = input_q.mul(c)
+        return input_q
 
 class WQ(nn.Module):
     def __init__(self, wbit, num_features, channel_wise=True):
@@ -93,6 +138,37 @@ class AQ(nn.Module):
         else:
             a_float = input
         return a_float
+
+class PROFITAQ(nn.Module):
+    def __init__(self, abit):
+        self.abit = abit
+        self.a = nn.Parameter(torch.Tensor(1.))
+        self.c = nn.Parameter(torch.Tensor(1.))
+
+    def _upadte_param(self, abit, offset, diff):
+        self.abit = abit
+
+        if offset + diff > 6:
+            self.a.data.fill_(np.log(np.exp(6)-1))
+            self.c.data.fill_(np.log(np.exp(6)-1))
+        else:
+            self.a.data.fill_(np.log(np.exp(offset + diff)-1))
+            self.c.data.fill_(np.log(np.exp(offset + diff)-1))
+        
+    def forward(self, input):
+        if self.abit == 32:
+            input_q = input
+        else:
+            n_lv = 2**self.abit
+            scale = n_lv - 1
+        
+            a = F.softplus(self.a)
+            c = F.softplus(self.c)
+
+            input = F.hardtanh(input / a, 0, 1)
+            input_q = RoundQuant.apply(input, scale)
+        return input_q
+
 
 class AQ_Symm(nn.Module):
     r"""
@@ -242,6 +318,44 @@ class QConvBN2d(ConvBN2d):
         if self.training:
             out *= reshape_to_activation(running_std / batch_std)
             out += reshape_to_activation(self.gamma * (running_mean / running_std - batch_mean / batch_std))
+        return out
+
+class QConv2d(nn.Conv2d):
+    def __init__(
+        self, 
+        in_channels, 
+        out_channels, 
+        kernel_size, 
+        stride=1, 
+        padding=0, 
+        dilation=1, 
+        groups=1, 
+        bias=False, 
+        wbit=32, 
+        abit=32, 
+    ):
+        super(QConv2d, self).__init__(
+            in_channels, out_channels, kernel_size, stride, padding, dilation, 
+            groups, bias
+        )
+        
+        # precisions
+        self.abit = abit
+        self.wbit = wbit
+        num_features = self.weight.data.size(0)
+
+        self.WQ = WQPROFIT(wbit, num_features, channel_wise=False)
+        self.AQ = PROFITAQ(abit)
+    
+    def _update_param(self, wbit, abit):
+        self.WQ.wbit = wbit
+        self.AQ.abit = abit
+
+    def forward(self, input):
+        weight_q = self.WQ(self.weight)
+        input_q = self.AQ(input)
+
+        out = F.conv2d(input_q, weight_q, self.bias, self.stride, self.padding, self.dilation, self.groups)
         return out
 
 
