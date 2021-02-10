@@ -1,4 +1,4 @@
-PYTHON="/home/jmeng15/anaconda3/envs/neurosim_test/bin/python3"
+PYTHON="/home/mengjian/anaconda3/envs/neurosim_test/bin/python3"
 
 ############ directory to save result #############
 
@@ -7,14 +7,14 @@ if [ ! -d "$DIRECTORY" ]; then
     mkdir ./dataset
 fi
 
-model=resnet20_Quant
+model=resnet20_Q
 dataset=cifar10
 epochs=200
 batch_size=128
 optimizer=SGD
 
 wd=0.0005
-lr=0.1
+lr=0.05
 
 save_path="./save/${model}/${model}_lr${lr}_wd${wd}_QHardTanh/"
 log_file="${model}_lr${lr}_wd${wd}.log"
