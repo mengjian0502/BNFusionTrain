@@ -80,6 +80,9 @@ class WQ(nn.Module):
 
             w_float = RoundQuant.apply(input, scale)
         return w_float
+    
+    def extra_repr(self):
+        return super(WQ, self).extra_repr() + 'wbit={}, channel_wise={}'.format(self.wbit, self.channel_wise)
 
 class AQ(nn.Module):
     def __init__(self, abit, num_features, alpha_init):
@@ -98,6 +101,9 @@ class AQ(nn.Module):
         else:
             a_float = input
         return a_float
+    
+    def extra_repr(self):
+        return super(AQ, self).extra_repr() + 'abit={}'.format(self.abit)
 
 class AQ_Symm(nn.Module):
     r"""
@@ -219,7 +225,7 @@ class QConvBN2d(ConvBN2d):
         if self.training:
             weight = self.WQ(self.weight)
             input = self.AQ(input)
-            out = F.conv2d(input, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
+            out = F.conv2d(input, weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
             batch_mean = out.mean([0,2,3])
             batch_var = out.var([0,2,3])

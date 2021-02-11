@@ -2,3 +2,4 @@ save/
 dataset/
 __pycache__/
 .vscode/
+*.swp

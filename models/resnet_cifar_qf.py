@@ -25,13 +25,13 @@ class ResNetBasicblock(nn.Module):
   """
   RexNet basicblock (https://github.com/facebook/fb.resnet.torch/blob/master/models/resnet.lua)
   """
-  def __init__(self, inplanes, planes, stride=1, downsample=None):
+  def __init__(self, inplanes, planes, stride=1, downsample=None, wbit=4, abit=4, channel_wise=False):
     super(ResNetBasicblock, self).__init__()   
-    self.conv_a = QConvBN2d(inplanes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+    self.conv_a = QConvBN2d(inplanes, planes, kernel_size=3, stride=stride, padding=1, bias=False, wbit=wbit, abit=abit, channel_wise=channel_wise)
     self.relu1 = nn.ReLU(inplace=True)
     # self.relu1 = nn.Hardtanh(min_val=-1.0, max_val=1.0, inplace=False)
 
-    self.conv_b = QConvBN2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False) 
+    self.conv_b = QConvBN2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False, wbit=wbit, abit=abit, channel_wise=channel_wise) 
     self.relu2 = nn.ReLU(inplace=True)
     # self.relu2 = nn.Hardtanh(min_val=-1.0, max_val=1.0, inplace=False)
     self.downsample = downsample
@@ -55,7 +55,7 @@ class CifarResNet(nn.Module):
   ResNet optimized for the Cifar dataset, as specified in
   https://arxiv.org/abs/1512.03385.pdf
   """
-  def __init__(self, depth, num_classes):
+  def __init__(self, depth, num_classes, wbit=4, abit=4, channel_wise=False):
     """ Constructor
     Args:
       depth: number of layers.
@@ -73,39 +73,37 @@ class CifarResNet(nn.Module):
     self.num_classes = num_classes
     self.conv_1_3x3 = QConvBN2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False, channel_wise=False)  
     self.relu0 = nn.ReLU(inplace=True)
-    # self.relu0 = nn.Hardtanh(min_val=-1.0, max_val=1.0, inplace=False)
 
     self.inplanes = 16
-    self.stage_1 = self._make_layer(block, 16, layer_blocks, 1)
-    self.stage_2 = self._make_layer(block, 32, layer_blocks, 2)
-    self.stage_3 = self._make_layer(block, 64, layer_blocks, 2)
+    self.stage_1 = self._make_layer(block, 16, layer_blocks, 1, wbit=wbit, abit=abit, channel_wise=channel_wise)
+    self.stage_2 = self._make_layer(block, 32, layer_blocks, 2, wbit=wbit, abit=abit, channel_wise=channel_wise)
+    self.stage_3 = self._make_layer(block, 64, layer_blocks, 2, wbit=wbit, abit=abit, channel_wise=channel_wise)
     self.avgpool = nn.AvgPool2d(8)
-    # self.classifier = nn.Linear(64*block.expansion, num_classes)
     self.classifier = QLinear(64*block.expansion, num_classes)
 
     for m in self.modules():
       if isinstance(m, nn.Conv2d):
         n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
         m.weight.data.normal_(0, math.sqrt(2. / n))
-        #m.bias.data.zero_()
+
         m.gamma.data.fill_(1)
         m.beta.data.zero_()
       elif isinstance(m, nn.Linear):
         init.kaiming_normal_(m.weight)
         m.bias.data.zero_()
 
-  def _make_layer(self, block, planes, blocks, stride=1):
+  def _make_layer(self, block, planes, blocks, stride=1, wbit=4, abit=4, channel_wise=False):
     downsample = None
     if stride != 1 or self.inplanes != planes * block.expansion:
       downsample = nn.Sequential(
-        QConvBN2d(self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, bias=False),   # full precision short connections
+        QConvBN2d(self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, bias=False, channel_wise=False),   # full precision short connections
         )
 
     layers = []
-    layers.append(block(self.inplanes, planes, stride, downsample))
+    layers.append(block(self.inplanes, planes, stride, downsample, wbit=wbit, abit=abit, channel_wise=channel_wise))
     self.inplanes = planes * block.expansion
     for i in range(1, blocks):
-      layers.append(block(self.inplanes, planes))
+      layers.append(block(self.inplanes, planes, wbit=wbit, abit=abit, channel_wise=channel_wise))
 
     return nn.Sequential(*layers)
 
