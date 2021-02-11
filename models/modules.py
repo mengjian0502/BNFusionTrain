@@ -18,10 +18,9 @@ from collections import OrderedDict
 class WeightQuant(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, scale):
-        ctx.save_for_backward(input)
-
         output_int = input.mul(scale[:,None,None,None]).round()
         output_float = output_int.div(scale[:,None,None,None])
+
         return output_float
 
     @staticmethod
@@ -31,7 +30,6 @@ class WeightQuant(torch.autograd.Function):
 class RoundQuant(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, scale):
-        ctx.save_for_backward(input)
         output_int = input.mul(scale).round()
         output_float = output_int.div(scale)
         return output_float
@@ -40,78 +38,18 @@ class RoundQuant(torch.autograd.Function):
     def backward(ctx, grad_output):
         return grad_output, None
 
-class Dorefa_quant_func(torch.autograd.Function):
-    def __init__(self, nbit):
-        super(Dorefa_quant_func, self).__init__()
-        self.nbit = nbit
-    
-    def forward(self, x):
-        self.save_for_backward(x)
-        weight = F.hardtanh(x)
-
-        scale = 2 ** self.nbit - 1
-        weight = weight / 2 / torch.max(weight.abs()) + 1/2
-        weight_q = torch.round(weight * scale) / scale
-        weight_q = 2 * weight_q - 1
-        return weight_q
-
-    def backward(self, grad_output):
-        grad_input = grad_output.clone()
-        return grad_input
-
-class WQPROFIT(nn.Module):
-    def __init__(self, wbit, num_features, channel_wise):
-        self.wbit = wbit
-        self.num_features = num_features
-        self.channel_wise
-        
-        # learnable parameters
-        if channel_wise:
-            self.a = nn.Parameter(torch.ones(num_features))
-            self.c = nn.Parameter(torch.ones(num_features))
-        else:
-            self.a = nn.Parameter(torch.Tensor(1.))
-            self.c = nn.Parameter(torch.Tensor(1.))
-
-    def _upadte_param(self, wbit):
-        self.wbit = wbit
-        max_val = self.weight.data.abs().max().item()
-        self.a.data.fill_(np.log(np.exp(max_val * 0.9)-1))
-        self.c.data.fill_(np.log(np.exp(max_val * 0.9)-1))
-
-    def forward(self, input):
-        if self.wbit == 32:
-            input_q = input
-        else:
-            n_lv = 2 ** self.wbit
-            scale = n_lv // 2 - 1
-            
-            # gradient friendly
-            a = F.softplus(self.a)  # keep the learnable value positive
-            c = F.softplus(self.c)
-
-            
-            if self.channel_wise:
-                input = input.div(a[:, None, None, None])
-                input = F.hardtanh(input, -1, 1)
-
-                scale = torch.ones_like(self.a.data).mul(scale)
-                input_q = WeightQuant.apply(input, scale)
-                input_q = input_q.mul(c[:,None,None,None])
-            else:
-                input = input.div(a)
-                input = F.hardtanh(input, -1, 1)
-
-                input_q = RoundQuant.apply(input, scale)
-                input_q = input_q.mul(c)
-        return input_q
 
 class WQ(nn.Module):
     def __init__(self, wbit, num_features, channel_wise=True):
         super(WQ, self).__init__()
         self.wbit = wbit
         self.num_features = num_features
-        self.register_buffer('alpha_w', torch.ones(num_features))
+
+        if channel_wise:
+            self.register_buffer('alpha_w', torch.ones(num_features))
+        else:
+            self.register_buffer('alpha_w', torch.tensor(1.))
+
         self.channel_wise = channel_wise
 
     def forward(self, input):
@@ -143,15 +81,6 @@ class WQ(nn.Module):
             w_float = RoundQuant.apply(input, scale)
         return w_float
 
-class WQDoreFa(nn.Module):
-    def __init__(self, wbit):
-        super(WQDoreFa, self).__init__()
-        self.wbit = wbit
-
-    def forward(self, input):
-        input_q = Dorefa_quant_func(self.wbit)(input)
-        return input_q
-
 class AQ(nn.Module):
     def __init__(self, abit, num_features, alpha_init):
         super(AQ, self).__init__()
@@ -170,37 +99,6 @@ class AQ(nn.Module):
             a_float = input
         return a_float
 
-class PROFITAQ(nn.Module):
-    def __init__(self, abit):
-        self.abit = abit
-        self.a = nn.Parameter(torch.Tensor(1.))
-        self.c = nn.Parameter(torch.Tensor(1.))
-
-    def _upadte_param(self, abit, offset, diff):
-        self.abit = abit
-
-        if offset + diff > 6:
-            self.a.data.fill_(np.log(np.exp(6)-1))
-            self.c.data.fill_(np.log(np.exp(6)-1))
-        else:
-            self.a.data.fill_(np.log(np.exp(offset + diff)-1))
-            self.c.data.fill_(np.log(np.exp(offset + diff)-1))
-        
-    def forward(self, input):
-        if self.abit == 32:
-            input_q = input
-        else:
-            n_lv = 2**self.abit
-            scale = n_lv - 1
-        
-            a = F.softplus(self.a)
-            c = F.softplus(self.c)
-
-            input = F.hardtanh(input / a, 0, 1)
-            input_q = RoundQuant.apply(input, scale)
-        return input_q
-
-
 class AQ_Symm(nn.Module):
     r"""
     Quantization function for Hardtanh
@@ -208,14 +106,14 @@ class AQ_Symm(nn.Module):
     def __init__(self, abit, num_features):
         super(AQ_Symm, self).__init__()
         self.abit = abit
-        self.alpha = torch.tensor(1.0).cuda()
     
     def forward(self, input):
         if input.size(1) > 3:
-            
-            with torch.no_grad():
-                n_lv = 2 ** (self.abit - 1) - 1
-                scale = n_lv / self.alpha
+            lb = input.min().item()
+            ub = input.max().item()
+
+            n_lv = 2 ** (self.abit - 1) - 1
+            scale = n_lv / ub
             a_float = RoundQuant.apply(input, scale)
         else:
             a_float = input
@@ -297,6 +195,7 @@ class QConvBN2d(ConvBN2d):
         wbit=4, 
         abit=4, 
         alpha_init=10.,
+        channel_wise=True
     ):
         super(QConvBN2d, self).__init__(
             in_channels, out_channels, kernel_size, stride, padding, dilation, 
@@ -308,7 +207,7 @@ class QConvBN2d(ConvBN2d):
         channels = self.weight.data.size(0) 
 
         # quantizers
-        self.WQ = WQ(wbit=wbit, num_features=channels)
+        self.WQ = WQ(wbit=wbit, num_features=channels, channel_wise=channel_wise)
         self.AQ = AQ(abit=abit, num_features=channels, alpha_init=alpha_init)
 
 
@@ -375,7 +274,7 @@ class QConv2d(nn.Conv2d):
         self.wbit = wbit
         num_features = self.weight.data.size(0)
 
-        self.WQ = WQ(wbit=wbit, num_features=num_features, channel_wise=True)
+        self.WQ = WQ(wbit=wbit, num_features=num_features, channel_wise=False)
         self.AQ = AQ(abit, num_features, alpha_init=10.0)
 
     def forward(self, input):
@@ -384,7 +283,6 @@ class QConv2d(nn.Conv2d):
 
         out = F.conv2d(input, weight_q, self.bias, self.stride, self.padding, self.dilation, self.groups)
         return out
-
 
 class QLinear(nn.Linear):
     r"""
@@ -404,9 +302,10 @@ class QLinear(nn.Linear):
         self.AQ = AQ(abit=abit, num_features=channels, alpha_init=alpha_init)
 
     def forward(self, input):
-        weight = self.weight.clone()
-        weight_q = self.WQ(weight)
+        weight_q = self.WQ(self.weight)
         input_q = self.AQ(input)
 
-        out = F.linear(input, weight_q, self.bias)
+        out = F.linear(input_q, weight_q, self.bias)
         return out
+
+
