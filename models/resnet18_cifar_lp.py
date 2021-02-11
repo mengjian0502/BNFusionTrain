@@ -4,7 +4,7 @@ import torch.utils.model_zoo as model_zoo
 import torch.nn.functional as F
 import torch
 from torch.nn import init
-from .modules import QConv2d, QLinear, QHardTanh, DoreFa_Conv2d, DoreFa_Linear, int_conv2d, int_linear
+from .modules import QConv2d, QLinear
 
 __all__ = ['resnet18_tanh']
 
@@ -15,11 +15,11 @@ class BasicBlock(nn.Module):
         
         self.conv1 = QConv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False, wbit=wbit, abit=abit)
         self.bn1 = nn.BatchNorm2d(planes)
-        self.relu1 = QHardTanh(num_bits=abit, alpha=1.0, inplace=True)  
+        self.relu1 = nn.ReLU(inplace=True)
 
         self.conv2 = QConv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False, wbit=wbit, abit=abit)
         self.bn2 = nn.BatchNorm2d(planes)
-        self.relu2 = QHardTanh(num_bits=abit, alpha=1.0, inplace=True)
+        self.relu2 = nn.ReLU(inplace=True)
 
         self.shortcut = nn.Sequential()
         if stride != 1 or in_planes != self.expansion*planes:
@@ -76,10 +76,9 @@ class ResNet(nn.Module):
         super(ResNet, self).__init__()
         self.in_planes = 64
 
-        # self.conv1 = int_conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False, nbit=wbit, mode=mode, k=k)
         self.conv1 = QConv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False, wbit=wbit, abit=abit)
         self.bn1 = nn.BatchNorm2d(64)
-        self.relu0 = QHardTanh(num_bits=abit, alpha=1.0, inplace=True)
+        self.relu0 = nn.ReLU(inplace=True)
 
         self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1, wbit=wbit, abit=abit)
         self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2, wbit=wbit, abit=abit)

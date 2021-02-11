@@ -26,12 +26,7 @@ class WeightQuant(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        grad_input = grad_output.clone()
-        input, = ctx.saved_tensors
-        
-        grad_input[input.ge(1)] = 0
-        grad_input[input.le(-1)] = 0
-        return grad_input, None
+        return grad_output, None
 
 class RoundQuant(torch.autograd.Function):
     @staticmethod
@@ -43,12 +38,7 @@ class RoundQuant(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        grad_input = grad_output.clone()
-        input, = ctx.saved_tensors
-        
-        grad_input[input.ge(1)] = 0
-        grad_input[input.le(-1)] = 0
-        return grad_input, None
+        return grad_output, None
 
 class Dorefa_quant_func(torch.autograd.Function):
     def __init__(self, nbit):
@@ -385,12 +375,13 @@ class QConv2d(nn.Conv2d):
         self.wbit = wbit
         num_features = self.weight.data.size(0)
 
-        self.WQ = WQ(wbit=wbit, num_features=num_features, channel_wise=False)
-        # self.AQ = AQ_Symm(abit, num_features)
+        self.WQ = WQ(wbit=wbit, num_features=num_features, channel_wise=True)
+        self.AQ = AQ(abit, num_features, alpha_init=10.0)
 
     def forward(self, input):
         weight = self.weight.clone()
         weight_q = self.WQ(weight)
+
         out = F.conv2d(input, weight_q, self.bias, self.stride, self.padding, self.dilation, self.groups)
         return out
 
@@ -410,229 +401,12 @@ class QLinear(nn.Linear):
 
         # quantizers
         self.WQ = WQ(wbit=wbit, num_features=channels, channel_wise=False)
-        # self.AQ = AQ_Symm(abit=abit, num_features=channels)
+        self.AQ = AQ(abit=abit, num_features=channels, alpha_init=alpha_init)
 
     def forward(self, input):
         weight = self.weight.clone()
         weight_q = self.WQ(weight)
-        # input_q = self.AQ(input)
+        input_q = self.AQ(input)
 
         out = F.linear(input, weight_q, self.bias)
         return out
-"""
-Old version
-"""
-
-def to_tensor(sat_val):
-    is_scalar = not isinstance(sat_val, torch.Tensor)
-    out = torch.tensor(sat_val) if is_scalar else sat_val.clone().detach()
-    if not out.is_floating_point():
-        out = out.to(torch.float32)
-    if out.dim() == 0:
-        out = out.unsqueeze(0)
-    return is_scalar, out
-
-def linear_quantize(input, scale, zero_point, inplace=False):
-    if inplace:
-        input.mul_(scale).sub_(zero_point).round_()
-        return input
-    return torch.round(input * scale - zero_point)
-
-def linear_dequantize(input, scale, zero_point, inplace=False):
-    if inplace:
-        input.add_(zero_point).div_(scale)
-        return input
-    return (input + zero_point) / scale
-
-
-def symmetric_linear_quantization_params(num_bits, saturation_val, restrict_qrange=False):
-    is_scalar, sat_val = to_tensor(saturation_val)
-    if any(sat_val < 0):
-        raise ValueError('Saturation value must be >= 0')
-
-    if restrict_qrange:
-        n = 2 ** (num_bits - 1) - 1
-    else:
-        n = (2 ** num_bits - 1) / 2
-
-    scale = n / sat_val
-    zero_point = torch.zeros_like(scale)
-
-    if is_scalar:
-        return scale.item(), zero_point.item()
-    return scale, zero_point
-
-
-class STEQuantizer(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, input, scale, zero_point, dequantize, inplace):
-        if inplace:
-            ctx.mark_dirty(input)
-
-        output = linear_quantize(input, scale, zero_point)
-        # print(f'quantized INT = {len(torch.unique(output))}')
-        if dequantize:
-            output = linear_dequantize(output, scale, zero_point)  
-        return output
-    
-    @staticmethod
-    def backward(ctx, grad_output):
-        """
-        Straight Through Estimator
-        """
-        
-        return grad_output, None, None, None, None
-
-
-class DoreFa_Conv2d(nn.Conv2d):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, 
-                 padding=0, dilation=1, groups=1, bias=False, wbit=4, abit=4):
-        super(DoreFa_Conv2d, self).__init__(in_channels, out_channels, kernel_size,
-                stride=stride, padding=padding, dilation=dilation, groups=groups,
-                bias=bias)
-        self.wbit = wbit
-
-    
-    def forward(self, input):
-        w_l = self.weight.clone()
-        weight_q = Dorefa_quant_func(self.wbit)(w_l)
-        output = F.conv2d(input, weight_q, self.bias, self.stride, self.padding, self.dilation, self.groups)
-        return output
-    
-    def extra_repr(self):
-        return super(DoreFa_Conv2d, self).extra_repr() + ', nbit={}'.format(self.wbit)
-
-
-class DoreFa_Linear(nn.Linear):
-    def __init__(self, in_channels, out_channels, bias=True, wbit=4, abit=4):
-        super(DoreFa_Linear, self).__init__(in_features=in_channels, out_features=out_channels, bias=bias)
-        self.wbit = wbit
-    
-    def forward(self, input):
-        w_l = self.weight.clone()
-        weight_q = Dorefa_quant_func(self.wbit)(w_l)
-        output = F.linear(input, weight_q, self.bias)
-        return output
-    
-    def extra_repr(self):
-        super(DoreFa_Linear, self).extra_repr()+ ', nbit={}'.format(self.wbit)
-
-class QHardTanh(nn.Module):
-    def __init__(self, num_bits, alpha=1.0, inplace=False, dequantize=True):
-        super(QHardTanh, self).__init__()
-        self.num_bits = num_bits
-        self.inplace = inplace
-        self.dequantize = dequantize
-        self.alpha = torch.tensor(alpha).cuda()
-
-    def forward(self, input):
-        input = F.hardtanh(input)
-
-        with torch.no_grad():
-            scale, zero_point = symmetric_linear_quantization_params(self.num_bits, self.alpha, restrict_qrange=True)
-        input = STEQuantizer.apply(input, scale, zero_point, self.dequantize, self.inplace)
-        return input
-
-def get_scale(input, z):
-    c1, c2 = 1/z[0], z[1]/z[0]
-    std = input.std()
-    mean = input.abs().mean()
-    q_scale = c1 * std - c2 * mean # change the plus sign to minus sign for the correct version of sawb alpha_w    
-    return q_scale 
-
-class STEQuantizer_weight(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, input, scale, zero_point, dequantize, inplace, nbit, restrict_range):
-        if inplace:
-            ctx.mark_dirty(input) 
-        output = linear_quantize(input, scale, zero_point)
-        if restrict_range is False:
-            if len(torch.unique(output)) == 2**nbit + 1:
-                n = (2 ** nbit) / 2
-                output = output.clamp(-n, n-1)
-        if dequantize:
-            output = linear_dequantize(output, scale, zero_point)  
-        return output
-    
-    @staticmethod
-    def backward(ctx, grad_output):
-        """
-        Straight Through Estimator
-        """
-        return grad_output, None, None, None, None, None, None
-
-class int_quant_func(torch.autograd.Function):
-    def __init__(self, nbit, alpha_w, restrictRange=True):
-        super(int_quant_func, self).__init__()
-        self.nbit = nbit
-        self.restrictRange = restrictRange
-        self.alpha_w = alpha_w
-
-    def forward(self, input):
-        self.save_for_backward(input)
-        output = input.clamp(-self.alpha_w.item(), self.alpha_w.item())
-        scale, zero_point = symmetric_linear_quantization_params(self.nbit, self.alpha_w, restrict_qrange=self.restrictRange)
-        output = STEQuantizer_weight.apply(output, scale, zero_point, True, False, self.nbit, self.restrictRange)   
-
-        return output
-
-    def backward(self, grad_output):
-        grad_input = grad_output.clone()
-        input, = self.saved_tensors
-        grad_input[input.ge(1)] = 0
-        grad_input[input.le(-1)] = 0
-        return grad_input
-
-
-class int_conv2d(nn.Conv2d):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, 
-                 padding=0, dilation=1, groups=1, bias=False, wbit=4, abit=4, mode='sawb', k=2):
-        super(int_conv2d, self).__init__(in_channels, out_channels, kernel_size,
-                stride=stride, padding=padding, dilation=dilation, groups=groups,
-                bias=bias)
-        self.wbit = wbit
-        self.mode = mode
-        self.k = k
-        self.register_buffer('alpha_w', torch.tensor(1.))
-
-    def forward(self, input):
-        w_l = self.weight.clone()
-
-        if self.mode == 'mean':
-            self.alpha_w = self.k * w_l.abs().mean()
-        elif self.mode == 'sawb':
-            z_typical = {'4bit': [0.077, 1.013], '8bit':[0.027, 1.114]}               
-            self.alpha_w = get_scale(w_l, z_typical[f'{int(self.wbit)}bit'])
-        else:
-            raise ValueError("Quantization mode must be either 'mean' or 'sawb'! ")
-            
-        weight_q = int_quant_func(nbit=self.wbit, alpha_w=self.alpha_w, restrictRange=True)(w_l)
-        output = F.conv2d(input, weight_q, self.bias, self.stride, self.padding, self.dilation, self.groups)
-
-        return output
-    
-    def extra_repr(self):
-        return super(int_conv2d, self).extra_repr() + ', nbit={}, mode={}, k={}'.format(self.wbit, self.mode, self.k)
-
-
-class int_linear(nn.Linear):
-    def __init__(self, in_channels, out_channels, bias=True, wbit=4, abit=4, mode='sawb', k=2):
-        super(int_linear, self).__init__(in_features=in_channels, out_features=out_channels, bias=bias)
-        self.wbit=wbit
-        self.mode = mode
-        self.k = k
-
-    def forward(self, input):
-        w_l = self.weight.clone()
-
-        if self.mode == 'mean':
-            self.alpha_w = self.k * w_l.abs().mean()
-        elif self.mode == 'sawb':
-            z_typical = {'4bit': [0.077, 1.013], '8bit':[0.027, 1.114]}               
-            self.alpha_w = get_scale(w_l, z_typical[f'{int(self.wbit)}bit'])
-        else:
-            raise ValueError("Quantization mode must be either 'mean' or 'sawb'! ")                         
-            
-        weight_q = int_quant_func(nbit=self.wbit, alpha_w=self.alpha_w, restrictRange=True)(w_l)
-        output = F.linear(input, weight_q, self.bias)
-        return output
