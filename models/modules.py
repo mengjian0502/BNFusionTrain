@@ -40,7 +40,7 @@ class RoundQuant(torch.autograd.Function):
 
 
 class WQ(nn.Module):
-    def __init__(self, wbit, num_features, channel_wise=True):
+    def __init__(self, wbit, num_features, channel_wise=1):
         super(WQ, self).__init__()
         self.wbit = wbit
         self.num_features = num_features
@@ -57,7 +57,7 @@ class WQ(nn.Module):
         z = z_typical[f'{int(self.wbit)}bit']
         n_lv = 2 ** (self.wbit - 1) - 1
 
-        if self.channel_wise:
+        if self.channel_wise == 1:
             m = input.abs().mean([1,2,3])
             std = input.std([1,2,3])
             
@@ -201,7 +201,7 @@ class QConvBN2d(ConvBN2d):
         wbit=4, 
         abit=4, 
         alpha_init=10.,
-        channel_wise=True
+        channel_wise=0
     ):
         super(QConvBN2d, self).__init__(
             in_channels, out_channels, kernel_size, stride, padding, dilation, 
@@ -269,6 +269,7 @@ class QConv2d(nn.Conv2d):
         bias=False, 
         wbit=32, 
         abit=32, 
+        channel_wise=0
     ):
         super(QConv2d, self).__init__(
             in_channels, out_channels, kernel_size, stride, padding, dilation, 
@@ -280,7 +281,7 @@ class QConv2d(nn.Conv2d):
         self.wbit = wbit
         num_features = self.weight.data.size(0)
 
-        self.WQ = WQ(wbit=wbit, num_features=num_features, channel_wise=False)
+        self.WQ = WQ(wbit=wbit, num_features=num_features, channel_wise=channel_wise)
         self.AQ = AQ(abit, num_features, alpha_init=10.0)
 
     def forward(self, input):
@@ -304,7 +305,7 @@ class QLinear(nn.Linear):
         channels = self.weight.data.size(0)
 
         # quantizers
-        self.WQ = WQ(wbit=wbit, num_features=channels, channel_wise=False)
+        self.WQ = WQ(wbit=wbit, num_features=channels, channel_wise=0)
         self.AQ = AQ(abit=abit, num_features=channels, alpha_init=alpha_init)
 
     def forward(self, input):

@@ -63,8 +63,7 @@ parser.add_argument('--resume', default='', type=str, help='path of the pretrain
 parser.add_argument('--wbit', type=int, default=4, help='weight precision')
 parser.add_argument('--abit', type=int, default=4, help='activation precision')
 parser.add_argument('--alpha_init', type=int, default=10., help='initial activation clipping')
-parser.add_argument('--q_mode', type=str, default="mean", help='weight quantization mode')
-parser.add_argument('--k', type=int, default=2, help='coefficient of quantization boundary')
+parser.add_argument('--channel_wise', type=int, default=0, help='channel_wise quantization flag')
 
 # activation clipping(PACT)
 parser.add_argument('--clp', dest='clp', action='store_true', help='using clipped relu in each stage')
@@ -148,8 +147,7 @@ def main():
     # Prepare the model
     logger.info('==> Building model..\n')
     model_cfg = getattr(models, args.model)
-    # model_cfg.kwargs.update({"num_classes": num_classes, "wbit": args.wbit, "abit":args.abit, "alpha_init": args.alpha_init, "mode": args.q_mode, "k": args.k})
-    model_cfg.kwargs.update({"num_classes": num_classes})
+    model_cfg.kwargs.update({"num_classes": num_classes, "wbit": args.wbit, "abit":args.abit, "channel_wise":args.channel_wise})
     net = model_cfg.base(*model_cfg.args, **model_cfg.kwargs) 
     logger.info(net)
 
