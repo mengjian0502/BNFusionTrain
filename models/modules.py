@@ -106,9 +106,9 @@ class WQPROFIT(nn.Module):
             self.a = nn.Parameter(torch.tensor(1.))
             self.c = nn.Parameter(torch.tensor(1.))
 
-    def _update_param(self, wbit):
+    def _update_param(self, wbit, max_val):
         self.wbit = wbit
-        max_val = self.weight.data.abs().max().item()
+        # max_val = self.weight.data.abs().max().item()
         self.a.data.fill_(np.log(np.exp(max_val * 0.9)-1))
         self.c.data.fill_(np.log(np.exp(max_val * 0.9)-1))
 
@@ -219,6 +219,7 @@ class AQPROFIT(nn.Module):
                 input = F.hardtanh(input / a, 0, 1)
                 input_q = RoundQuant.apply(input, scale)
                 input_q = input_q * c
+                # import pdb;pdb.set_trace()
             else:
                 input_q = input
         return input_q
@@ -389,8 +390,7 @@ class QConv2d(nn.Conv2d):
         self.register_buffer("mask", torch.ones(self.weight.data.size()))
 
     def forward(self, input):
-        weight = self.weight.clone()
-        weight_q = self.WQ(weight)
+        weight_q = self.WQ(self.weight)
         input_q = self.AQ(input)
 
         out = F.conv2d(input_q, weight_q, self.bias, self.stride, self.padding, self.dilation, self.groups)

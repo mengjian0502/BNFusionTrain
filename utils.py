@@ -260,7 +260,6 @@ def get_optimizer(params, train_quant, train_weight, train_bnbias, args):
 
 def reset_weight_copy(model):
     for name, module in model.module.named_modules():
-        print(name)
         if hasattr(module, "WQ"):
             if hasattr(module.WQ, "weight_old"):
                 del module.WQ.weight_old
@@ -300,9 +299,9 @@ def train_profit(train_loader, net, net_t, criterion, optimizer, epoch, metric_m
 
         if len(metric_map) > 0:
             def forward_hook(self, input, output):
-                if self.weight_old is not None and input[0].get_device() == 0:
+                if self.WQ.weight_old is not None and input[0].get_device() == 0:
                     with torch.no_grad():
-                        out_old = torch.nn.functional.conv2d(input[0], self.weight_old, self.bias,
+                        out_old = torch.nn.functional.conv2d(input[0], self.WQ.weight_old, self.bias,
                             self.stride, self.padding, self.dilation, self.groups)
 
                         out_t = torch.transpose(output, 0, 1).contiguous().view(self.out_channels, -1)
@@ -368,7 +367,7 @@ def train_profit(train_loader, net, net_t, criterion, optimizer, epoch, metric_m
                 'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                 'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
                 'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
-                    epoch, i+1, len(train_loader), batch_time=batch_time,
+                    epoch+1, i+1, len(train_loader), batch_time=batch_time,
                     data_time=data_time, loss=losses, top1=top1, top5=top5))
         
         for key, value in metric_itr_map.items():
@@ -398,7 +397,8 @@ def init_precision(model, loader, abit, wbit, set_a=False, set_w=False, eps=0.05
                 # import pdb;pdb.set_trace()
             
             if set_w:
-                module.WQ._update_param(wbit)
+                max_val = module.weight.data.abs().max().item()
+                module.WQ._update_param(wbit, max_val)
 
     hooks = []
     for name, module in model.named_modules():
@@ -427,7 +427,7 @@ def set_precision(model, abit=32, wbit=32, set_a=False, set_w=False):
             else:
                 module.AQ.abit = 32
             
-            if set_a:
+            if set_w:
                 module.WQ.wbit = wbit
             else:
                 module.WQ.wbit = 32

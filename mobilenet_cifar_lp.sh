@@ -16,12 +16,13 @@ channel_wise=0
 w_profit=4
 
 wd=0.00004
-lr=0.0005
+lr=0.005
 
 save_path="./save/${model}/${model}_lr${lr}_wd${wd}_PROFIT/"
-log_file="${model}_lr${lr}_wd${wd}.log"
+log_file="${model}_lr${lr}_wd${wd}_eval.log"
 
-pretrained_model="./pretrained/MaskedMobileNetV1_cifar_FP_cifar10/model_best.pth"
+# pretrained_model="./pretrained/MaskedMobileNetV1_cifar_FP_cifar10/model_best.pth"
+pretrained_model="./save/mobilenetv1_Q/mobilenetv1_Q_lr0.005_wd0.00004_PROFIT/checkpoint_w4_a4_ft3.pth.tar"
 
 $PYTHON -W ignore train_profit.py --dataset ${dataset} \
     --data_path ./dataset/ \
@@ -39,6 +40,9 @@ $PYTHON -W ignore train_profit.py --dataset ${dataset} \
     --fine_tune \
     --stabilize \
     --teacher self \
+    --evaluate
+    
+    
 
 
 

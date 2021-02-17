@@ -172,7 +172,7 @@ def main():
         logger.info("=> loading checkpoint '{}'".format(args.resume))
         checkpoint = torch.load(args.resume)
         for k, v in checkpoint['state_dict'].items():
-            name = k
+            name = k[7:]
             new_state_dict[name] = v
         
         state_tmp = net.state_dict()
@@ -210,6 +210,7 @@ def main():
     
     # evaluate
     if args.evaluate:
+        set_precision(net, abit=args.a_bit[-1], wbit=args.w_bit[-1], set_a=True, set_w=True)
         test_acc, val_loss = test(testloader, net, criterion, 0)
         logger.info(f'Test accuracy: {test_acc}')
         exit()
@@ -252,7 +253,7 @@ def main():
         init_precision(net, trainloader, args.a_bit[-1], wbit=args.w_bit[0], set_w=True)
     for wbit in args.w_bit:
         logger.info(f"=> Weight quantization: {wbit}...")
-        set_precision(net, wbit=wbit, set_w=True)
+        set_precision(net, abit=args.a_bit[-1], wbit=wbit, set_a=True, set_w=True)
 
         if args.stabilize:
             logger.info("=> BN stabilize")
@@ -268,14 +269,14 @@ def main():
             for name, module in net.named_modules():
                 if hasattr(module, "WQ") and isinstance(module, nn.Conv2d):
                     metric_map[name] = 0                                    # initialize the metric map
-            
+
             optimizer = get_optimizer(params, train_quant=True, train_weight=True, train_bnbias=True, args=args)
 
             for epoch in range(args.sample_epoch):
                 train_acc, train_loss, metric_map = train_profit(trainloader, net, net_t, criterion, optimizer, epoch, metric_map, logger)
                 val_acc, val_loss = test(testloader, net, criterion, epoch)
             
-            with open(os.path.join(args.ckpt, metric_map_name + ".pkl"), "wb") as f:
+            with open(os.path.join(args.save_path, metric_map_name + ".pkl"), "wb") as f:
                 pickle.dump(metric_map, f)  
 
             # sampling completed; freezing the parameters
@@ -309,7 +310,7 @@ def main():
             logger.info("=> Fine-tune")
             params = categorize_param(net)
             optimizer = get_optimizer(params, train_quant=True, train_weight=True, train_bnbias=True, args=args)
-            train_epoch(net, net_t, wbit, abit, start_epoch=0, warmup_epoch=args.warmup, trainloader=trainloader, 
+            train_epoch(net, net_t, epochs=args.ft_epoch, wbit=wbit, abit=abit, start_epoch=0, warmup_epoch=args.warmup, trainloader=trainloader, 
                             testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='ft')
 
         if args.stabilize:
@@ -348,8 +349,8 @@ def train_epoch(net, net_t, epochs, wbit, abit, start_epoch=0,
         epoch_time.update(e_time)
         start_time = time.time()
 
-        logger.info("\nEpoch [{}]/[{}]: Train Loss: {}; Top1 Train: {} | Val Loss: {}; Val Acc: {}".format(
-            epoch, epochs-start_epoch, train_loss, train_acc, val_loss, val_acc))
+        logger.info("\nEpoch [{}]/[{}]: Train Loss: {}; Top1 Train: {} | Val Loss: {}; Val Acc: {}\n".format(
+            epoch+1, epochs-start_epoch, train_loss, train_acc, val_loss, val_acc))
 
 
 class CosineWithWarmup(torch.optim.lr_scheduler._LRScheduler):
