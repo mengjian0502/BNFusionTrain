@@ -190,6 +190,11 @@ def main():
     
     # Evaluate
     if args.evaluate:
+        # model structure
+        for name, module in net.named_modules():
+            if "WQ" in name:
+                print(module.wbit)
+
         test_acc, val_loss = test(testloader, net, criterion, 0)
         logger.info(f'Test accuracy: {test_acc}')
         exit()
@@ -228,7 +233,6 @@ def main():
         }
         
         filename='checkpoint.pth.tar'
-        
         save_checkpoint(state, is_best, args.save_path, filename=filename)
 
         e_time = time.time() - start_time

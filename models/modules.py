@@ -1,5 +1,5 @@
 """
-DNN quantization with merged modules
+DNN quantization with / without merged modules
 """
 
 from __future__ import absolute_import
@@ -30,8 +30,8 @@ class WeightQuant(torch.autograd.Function):
 class RoundQuant(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, scale):
-        output_int = input.mul(scale).round()
-        output_float = output_int.div(scale)
+        output_int = input.mul(scale).round_()
+        output_float = output_int.div_(scale)
         return output_float
 
     @staticmethod
@@ -84,6 +84,64 @@ class WQ(nn.Module):
     def extra_repr(self):
         return super(WQ, self).extra_repr() + 'wbit={}, channel_wise={}'.format(self.wbit, self.channel_wise)
 
+class WQPROFIT(nn.Module):
+    """
+    PROFIT: A Novel Training Method for sub-4-bit MobileNet Models
+    https://github.com/EunhyeokPark/PROFIT
+
+    Weight Quantization Module
+    """
+    def __init__(self, wbit=32, num_features=None, channel_wise=False):
+        super(WQPROFIT, self).__init__()
+        self.wbit = wbit
+        self.num_features = num_features
+        self.channel_wise = channel_wise
+        self.weight_old = None
+        
+        # learnable parameters
+        if channel_wise:
+            self.a = nn.Parameter(torch.ones(num_features))
+            self.c = nn.Parameter(torch.ones(num_features))
+        else:
+            self.a = nn.Parameter(torch.tensor(1.))
+            self.c = nn.Parameter(torch.tensor(1.))
+
+    def _update_param(self, wbit):
+        self.wbit = wbit
+        max_val = self.weight.data.abs().max().item()
+        self.a.data.fill_(np.log(np.exp(max_val * 0.9)-1))
+        self.c.data.fill_(np.log(np.exp(max_val * 0.9)-1))
+
+    def forward(self, input):
+        if self.wbit == 32:
+            input_q = input
+        else:
+            n_lv = 2 ** self.wbit
+            scale = n_lv // 2 - 1
+            
+            # gradient friendly
+            a = F.softplus(self.a)  # keep the learnable value positive
+            c = F.softplus(self.c)
+
+            
+            if self.channel_wise:
+                input = input.div(a[:, None, None, None])
+                input = F.hardtanh(input, -1, 1)
+
+                scale = torch.ones_like(self.a.data).mul(scale)
+                input_q = WeightQuant.apply(input, scale)
+                input_q = input_q.mul(c[:,None,None,None])
+            else:
+                input = input.div(a)
+                input = F.hardtanh(input, -1, 1)
+
+                input_q = RoundQuant.apply(input, scale)
+                input_q = input_q.mul(c)
+        return input_q
+    
+    def extra_repr(self):
+        return super(WQPROFIT, self).extra_repr() + 'wbit={}, channel_wise={}'.format(self.wbit, self.channel_wise)
+
 class AQ(nn.Module):
     def __init__(self, abit, num_features, alpha_init):
         super(AQ, self).__init__()
@@ -124,6 +182,49 @@ class AQ_Symm(nn.Module):
         else:
             a_float = input
         return a_float
+
+class AQPROFIT(nn.Module):
+    """
+    PROFIT: A Novel Training Method for sub-4-bit MobileNet Models
+    https://github.com/EunhyeokPark/PROFIT
+
+    Activation Quantization Module
+    """
+    def __init__(self, abit=32):
+        super(AQPROFIT, self).__init__()
+        self.abit = abit
+        self.a = nn.Parameter(torch.tensor(1.))
+        self.c = nn.Parameter(torch.tensor(1.))
+
+    def _update_param(self, abit, offset, diff):
+        self.abit = abit
+        if offset + diff > 6:
+            self.a.data.fill_(np.log(np.exp(6)-1))
+            self.c.data.fill_(np.log(np.exp(6)-1))
+        else:
+            self.a.data.fill_(np.log(np.exp(offset + diff)-1))
+            self.c.data.fill_(np.log(np.exp(offset + diff)-1))
+        
+    def forward(self, input):
+        if self.abit == 32:
+            input_q = input
+        else:
+            if input.size(1) > 3:
+                n_lv = 2**self.abit
+                scale = n_lv - 1
+            
+                a = F.softplus(self.a)
+                c = F.softplus(self.c)
+
+                input = F.hardtanh(input / a, 0, 1)
+                input_q = RoundQuant.apply(input, scale)
+                input_q = input_q * c
+            else:
+                input_q = input
+        return input_q
+
+    def extra_repr(self):
+        return super(AQPROFIT, self).extra_repr() + 'abit={}'.format(self.abit)
 
 class ConvBN2d(nn.Conv2d):
     r"""
@@ -281,21 +382,25 @@ class QConv2d(nn.Conv2d):
         self.wbit = wbit
         num_features = self.weight.data.size(0)
 
-        self.WQ = WQ(wbit=wbit, num_features=num_features, channel_wise=channel_wise)
-        self.AQ = AQ(abit, num_features, alpha_init=10.0)
+        self.WQ = WQPROFIT(wbit=wbit, num_features=num_features, channel_wise=channel_wise)
+        self.AQ = AQPROFIT(abit)
+
+        # mask
+        self.register_buffer("mask", torch.ones(self.weight.data.size()))
 
     def forward(self, input):
         weight = self.weight.clone()
         weight_q = self.WQ(weight)
+        input_q = self.AQ(input)
 
-        out = F.conv2d(input, weight_q, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        out = F.conv2d(input_q, weight_q, self.bias, self.stride, self.padding, self.dilation, self.groups)
         return out
 
 class QLinear(nn.Linear):
     r"""
     Fully connected layer with Quantized weight
     """
-    def __init__(self, in_features, out_features, bias=True, wbit=4, abit=4, alpha_init=10.0):
+    def __init__(self, in_features, out_features, bias=True, wbit=32, abit=32, alpha_init=10.0):
         super(QLinear, self).__init__(in_features=in_features, out_features=out_features, bias=bias)
         
         # precisions
@@ -305,8 +410,11 @@ class QLinear(nn.Linear):
         channels = self.weight.data.size(0)
 
         # quantizers
-        self.WQ = WQ(wbit=wbit, num_features=channels, channel_wise=0)
-        self.AQ = AQ(abit=abit, num_features=channels, alpha_init=alpha_init)
+        self.WQ = WQPROFIT(wbit=wbit, num_features=channels, channel_wise=0)
+        self.AQ = AQPROFIT(abit=abit)
+
+        # mask
+        self.register_buffer("mask", torch.ones(self.weight.data.size()))
 
     def forward(self, input):
         weight_q = self.WQ(self.weight)

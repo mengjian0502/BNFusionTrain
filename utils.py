@@ -1,6 +1,7 @@
 """
 Utilities of MobileNet training
 """
+from models import modules
 import os
 import sys
 import time
@@ -12,10 +13,12 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torchvision
+import torch.optim as optim
 import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 import seaborn as sns
 from functools import partial
+_print_freq = 50
 
 
 class AverageMeter(object):
@@ -68,7 +71,6 @@ def train(trainloader, net, criterion, optimizer, epoch, args):
     
     end = time.time()
     for batch_idx, (inputs, targets) in enumerate(trainloader):
-        # measure the data loading time
         data_time.update(time.time() - end)
         
         targets = targets.cuda(non_blocking=True)
@@ -125,7 +127,6 @@ def test(testloader, net, criterion, epoch):
     test_loss = 0
 
     end = time.time()
-    # k = 7.0
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(testloader):
             mean_loader = []
@@ -219,6 +220,217 @@ def log2df(log_file_name):
         df.loc[i] = [float(x) for x in lines[num_lines-num_epochs+i].split()]
     return df 
 
+"""
+PROFIT Util
+"""
+def categorize_param(model, skip_list=()):
+    quant = []
+    skip = []
+    bnbias = []
+    weight = []
+
+    for name, param, in model.named_parameters():
+        skip_found = False
+        for s in skip_list:
+            if name.find(s) != -1:
+                skip_found = True
+        
+        if not param.requires_grad:
+            continue
+        elif name.endswith(".a") or name.endswith(".c"):
+            quant.append(param)
+        elif skip_found:
+            skip.append(param)
+        elif len(param.shape) == 1 or name.endswith(".bias"):
+            bnbias.append(param)
+        else:
+            weight.append(param)
+
+    return (quant, skip, weight, bnbias)
+
+def get_optimizer(params, train_quant, train_weight, train_bnbias, args):
+    (quant, skip, weight, bnbias) = params
+    optimizer = optim.SGD([
+        {'params': skip, 'weight_decay': 0, 'lr': 0},
+        {'params': quant, 'weight_decay': 0., 'lr': args.lr * 1e-2 if train_quant else 0},
+        {'params': bnbias, 'weight_decay': 0., 'lr': args.lr if train_bnbias else 0},
+        {'params': weight, 'weight_decay': args.weight_decay, 'lr': args.lr if train_weight else 0},
+    ], momentum=0.9, nesterov=True)
+    return optimizer
+
+def reset_weight_copy(model):
+    for name, module in model.module.named_modules():
+        print(name)
+        if hasattr(module, "WQ"):
+            if hasattr(module.WQ, "weight_old"):
+                del module.WQ.weight_old
+            module.WQ.weight_old = None
+
+def train_profit(train_loader, net, net_t, criterion, optimizer, epoch, metric_map={}, logger=None):
+    batch_time = AverageMeter()
+    data_time = AverageMeter()
+    losses = AverageMeter()
+    top1 = AverageMeter()
+    top5 = AverageMeter()
+
+    net.train()
+    
+    # reset weight copy
+    reset_weight_copy(net)
+
+    if net_t is not None:
+        net_t.train()
+
+    end = time.time()
+
+    for i, (input, target) in enumerate(train_loader):
+        data_time.update(time.time() - end)
+
+        # deploy the data
+        input = input.cuda()
+        target = target.cuda(non_blocking=True)
+
+        if net_t is not None:
+            output_t = net_t(input)
+        
+
+        # create and attach hook for layer-wise aiwq measure
+        hooks = []
+        metric_itr_map = {}
+
+        if len(metric_map) > 0:
+            def forward_hook(self, input, output):
+                if self.weight_old is not None and input[0].get_device() == 0:
+                    with torch.no_grad():
+                        out_old = torch.nn.functional.conv2d(input[0], self.weight_old, self.bias,
+                            self.stride, self.padding, self.dilation, self.groups)
+
+                        out_t = torch.transpose(output, 0, 1).contiguous().view(self.out_channels, -1)
+                        out_mean = torch.mean(out_t, 1)
+                        out_std = torch.std(out_t, 1) # + 1e-8
+
+                        out_old_t = torch.transpose(out_old, 0, 1).contiguous().view(self.out_channels, -1)
+                        out_old_mean = torch.mean(out_old_t, 1)
+                        out_old_std = torch.std(out_old_t, 1) # + 1e-8
+
+                        out_cond = out_std != 0
+                        out_old_cond = out_old_std != 0
+                        cond = out_cond & out_old_cond
+
+                        out_mean = out_mean[cond]
+                        out_std = out_std[cond]
+
+                        out_old_mean = out_old_mean[cond]
+                        out_old_std = out_old_std[cond]
+
+                        KL = torch.log(out_old_std / out_std) + \
+                            (out_std ** 2  + (out_mean - out_old_mean) ** 2) / (2 * out_old_std ** 2) - 0.5
+                        metric_itr_map[self.name] = KL.mean().data.cpu().numpy()
+            
+            for name, module in net.module.named_modules():
+                if hasattr(module, "WQ") and isinstance(module, torch.nn.Conv2d):
+                    module.name = name
+                    hooks.append(module.register_forward_hook(forward_hook))
+        
+        # feed forward
+        output = net(input)
+        for hook in hooks:
+            hook.remove()
+        
+        loss_s = criterion(output, target)      # student model loss
+        if net_t is not None:
+            loss_kd = -1 * torch.mean(
+                torch.sum(torch.nn.functional.softmax(output_t, dim=1) 
+                        * torch.nn.functional.log_softmax(output, dim=1), dim=1))
+            loss = loss_s + loss_kd
+        else:
+            loss = loss_s
+
+        # backward
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        # measure accuracy and record loss
+        prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
+        losses.update(loss_s.data.item(), input.size(0))
+        top1.update(prec1.item(), input.size(0))
+        top5.update(prec5.item(), input.size(0))
+
+        if ((i+1) % _print_freq) == 0:
+            logger.info('Epoch: [{0}][{1}/{2}]\t'
+                'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
+                'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
+                    epoch, i+1, len(train_loader), batch_time=batch_time,
+                    data_time=data_time, loss=losses, top1=top1, top5=top5))
+        
+        for key, value in metric_itr_map.items():
+            if value > 1:
+                continue
+            metric_map[key] = 0.999 * metric_map[key] + 0.001 * value
+    
+    return top1.avg, losses.avg, metric_map
+
+def init_precision(model, loader, abit, wbit, set_a=False, set_w=False, eps=0.05):
+    def init_hook(module, input, output):
+        if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
+            if not isinstance(input, torch.Tensor):
+                input = input[0]
+            input = input.detach().cpu()
+            input = input.reshape(-1)
+            input = input[input > 0]
+            input, _ = torch.sort(input)
+
+            if len(input) == 0:
+                small, large = 0, 1e-3
+            else:
+                small, large = input[int(len(input)*eps)], input[int(len(input)*(1-eps))]
+            
+            if set_a: 
+                module.AQ._update_param(abit, small, large-small)
+                # import pdb;pdb.set_trace()
+            
+            if set_w:
+                module.WQ._update_param(wbit)
+
+    hooks = []
+    for name, module in model.named_modules():
+        hook = module.register_forward_hook(init_hook)
+        hooks.append(hook)
+    
+    model.train()
+    model.cpu()
+    for i, (input, target) in enumerate(loader):
+        with torch.no_grad():
+            if isinstance(model, nn.DataParallel):
+                output = model.module(input)
+            else:
+                output = model(input)
+        break
+    
+    model.cuda()
+    for hook in hooks:
+        hook.remove()
+
+def set_precision(model, abit=32, wbit=32, set_a=False, set_w=False):
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
+            if set_a:
+                module.AQ.abit = abit
+            else:
+                module.AQ.abit = 32
+            
+            if set_a:
+                module.WQ.wbit = wbit
+            else:
+                module.WQ.wbit = 32
 
 if __name__ == "__main__":
     log = log2df('./save/resnet20_quant_grp8/resnet20_quant_w4_a4_modemean_k2_lambda0.0010_ratio0.7_wd0.0005_lr0.01_swpFalse_groupch8_pushFalse_iter4000_g01/resnet20_quant_w4_a4_modemean_k2_lambda0.0010_ratio0.7_wd0.0005_lr0.01_swpFalse_groupch8_pushFalse_iter4000_tmp_g03.log')
