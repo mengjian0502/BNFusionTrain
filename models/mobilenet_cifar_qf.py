@@ -4,7 +4,7 @@ MobileNetV1 on CIFAR-10
 import numpy as np
 import torch
 import torch.nn as nn
-from .modules import QConv2d, QLinear
+from .modules import QConv2d, QLinear, QConvBN2d
 
 class Net(nn.Module):
     """
@@ -23,12 +23,10 @@ class Net(nn.Module):
 
         def conv_dw(inp, oup, stride):
             return nn.Sequential(
-                QConv2d(inp, inp, 3, stride, 1, groups=inp, bias=False, wbit=wbit, abit=abit, channel_wise=channel_wise),
-                nn.BatchNorm2d(inp),
+                QConvBN2d(inp, inp, 3, stride, 1, groups=inp, bias=False, wbit=wbit, abit=abit, channel_wise=channel_wise),
                 nn.ReLU(inplace=True),
 
-                QConv2d(inp, oup, 1, 1, 0, bias=False, wbit=wbit, abit=abit, channel_wise=channel_wise),
-                nn.BatchNorm2d(oup),
+                QConvBN2d(inp, oup, 1, 1, 0, bias=False, wbit=wbit, abit=abit, channel_wise=channel_wise),
                 nn.ReLU(inplace=True)
             )
 
@@ -58,7 +56,7 @@ class Net(nn.Module):
         x = self.fc(x)
         return x
 
-class mobilenetv1_Q:
+class mobilenetv1_QF:
   base=Net
   args = list()
   kwargs = {'alpha': 0.75}

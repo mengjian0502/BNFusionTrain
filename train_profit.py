@@ -83,6 +83,7 @@ parser.add_argument("--stabilize", action="store_true", default=False)
 parser.add_argument("--w_bit", required=True, type=int, nargs="+")
 parser.add_argument("--a_bit", required=True, type=int, nargs="+")
 parser.add_argument("--w_profit", required=True, type=int, nargs="+")
+parser.add_argument('--channel_wise', type=int, default=0, help='channel_wise quantization flag')
 
 args = parser.parse_args()
 args.use_cuda = torch.cuda.is_available()
@@ -161,7 +162,7 @@ def main():
     logger.info('==> Building model..\n')
     # student model
     model_cfg = getattr(models, args.model)
-    model_cfg.kwargs.update({"num_classes": num_classes, "wbit": 32, "abit":32})
+    model_cfg.kwargs.update({"num_classes": num_classes, "wbit": 32, "abit":32, "channel_wise":args.channel_wise})
     net = model_cfg.base(*model_cfg.args, **model_cfg.kwargs) 
 
     # teacher model
@@ -220,7 +221,7 @@ def main():
         params = categorize_param(net)
         optimizer = get_optimizer(params, train_quant=True, train_weight=True, train_bnbias=True, args=args)
         train_epoch(net, net_t, args.ft_epoch, wbit=32, abit=32, trainloader=trainloader, testloader=testloader, 
-                    criterion=criterion, optimizer=optimizer, logger=logger, prefix='ft0')
+                    criterion=criterion, optimizer=optimizer, logger=logger, prefix='ft0', lasso=False)
     
     wbit, abit = 32, 32
     # Progressive activation quantization: 
@@ -234,19 +235,19 @@ def main():
             params = categorize_param(net)
             optimizer = get_optimizer(params, train_quant=True, train_weight=False, train_bnbias=True, args=args)
             train_epoch(net, net_t, epochs=args.bn_epoch, wbit=wbit, abit=abit, start_epoch=0, warmup_epoch=0, trainloader=trainloader, 
-                        testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='bn')
+                        testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='bn', lasso=False)
     
         logger.info("=> Fine-tune")
         optimizer = get_optimizer(params, train_quant=True, train_weight=False, train_bnbias=True, args=args)
         train_epoch(net, net_t, epochs=args.ft_epoch, wbit=wbit, abit=abit, start_epoch=0, warmup_epoch=args.warmup, trainloader=trainloader, 
-                            testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='ft')
+                            testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='ft', lasso=False)
 
         if args.stabilize:
             logger.info("=> BN stabilize 2")
             params = categorize_param(net)
             optimizer = get_optimizer(params, train_quant=True, train_weight=False, train_bnbias=True, args=args)
             train_epoch(net, net_t, epochs=args.bn_epoch, wbit=wbit, abit=abit, start_epoch=0, warmup_epoch=0, trainloader=trainloader, 
-                        testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='bn2')
+                        testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='bn2', lasso=False)
     
     # progressive weight quantization
     with torch.no_grad():
@@ -260,7 +261,7 @@ def main():
             params = categorize_param(net)
             optimizer = get_optimizer(params, train_quant=True, train_weight=False, train_bnbias=True, args=args)
             train_epoch(net, net_t, epochs=args.bn_epoch, wbit=wbit, abit=abit, start_epoch=0, warmup_epoch=0, trainloader=trainloader, 
-                        testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='bn')
+                        testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='bn', lasso=False)
         
         if wbit in args.w_profit:
             logger.info("=> Sampling")
@@ -292,35 +293,35 @@ def main():
             params = categorize_param(net)
             optimizer = get_optimizer(params, train_quant=True, train_weight=True, train_bnbias=True, args=args)
             train_epoch(net, net_t, epochs=args.ft_epoch, wbit=wbit, abit=abit, start_epoch=0, warmup_epoch=args.warmup, trainloader=trainloader, 
-                            testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='ft1')
+                            testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='ft1', lasso=False)
 
             # train the model with the first 1/3 parameter frozen
             params = categorize_param(net, skip_list)
             optimizer = get_optimizer(params, train_quant=True, train_weight=True, train_bnbias=True, args=args)
             train_epoch(net, net_t, epochs=args.ft_epoch, wbit=wbit, abit=abit, start_epoch=0, warmup_epoch=args.warmup, trainloader=trainloader, 
-                            testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='ft2')
+                            testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='ft2', lasso=False)
             
             # train the model with all the parameter frozen
             params = categorize_param(net, skip_list+skip_list_next)
             optimizer = get_optimizer(params, train_quant=True, train_weight=True, train_bnbias=True, args=args)
             train_epoch(net, net_t, epochs=args.ft_epoch, wbit=wbit, abit=abit, start_epoch=0, warmup_epoch=args.warmup, trainloader=trainloader, 
-                            testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='ft3')
+                            testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='ft3', lasso=False)
             
         else:
             logger.info("=> Fine-tune")
             params = categorize_param(net)
             optimizer = get_optimizer(params, train_quant=True, train_weight=True, train_bnbias=True, args=args)
             train_epoch(net, net_t, epochs=args.ft_epoch, wbit=wbit, abit=abit, start_epoch=0, warmup_epoch=args.warmup, trainloader=trainloader, 
-                            testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='ft')
+                            testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='ft', lasso=False)
 
         if args.stabilize:
             logger.info("=> BN stabilize 2")            
             optimizer = get_optimizer(params, train_quant=True, train_weight=False, train_bnbias=True, args=args)
             train_epoch(net, net_t, epochs=args.bn_epoch, wbit=wbit, abit=abit, start_epoch=0, warmup_epoch=0, trainloader=trainloader, 
-                        testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='bn2')
+                        testloader=testloader, criterion=criterion, optimizer=optimizer, logger=logger, prefix='bn2', lasso=False)
 
 def train_epoch(net, net_t, epochs, wbit, abit, start_epoch=0, 
-                warmup_epoch=0, trainloader=None, testloader=None, criterion=None, optimizer=None, logger=None, prefix=None):
+                warmup_epoch=0, trainloader=None, testloader=None, criterion=None, optimizer=None, logger=None, prefix=None, lasso=False):
     start_time = time.time()
     epoch_time = AverageMeter()
     best_acc = 0.
@@ -328,7 +329,7 @@ def train_epoch(net, net_t, epochs, wbit, abit, start_epoch=0,
     scheduler = CosineWithWarmup(optimizer, warmup_len=warmup_epoch, warmup_start_multiplier=0.1, max_epochs=epochs, eta_min=1e-3, last_epoch=-1)
 
     for epoch in range(start_epoch, start_epoch+epochs):
-        train_acc, train_loss, _ = train_profit(trainloader, net=net, net_t=net_t, criterion=criterion, optimizer=optimizer, epoch=epoch, logger=logger)
+        train_acc, train_loss, _ = train_profit(trainloader, net=net, net_t=net_t, criterion=criterion, optimizer=optimizer, epoch=epoch, logger=logger, lasso=lasso)
         val_acc, val_loss = test(testloader, net, criterion, epoch)  
         
         is_best = val_acc > best_acc

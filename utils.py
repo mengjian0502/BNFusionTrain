@@ -142,6 +142,7 @@ def test(testloader, net, criterion, epoch):
 
             batch_time.update(time.time() - end)
             end = time.time()
+            break
     return top1.avg, losses.avg
 
 def convert_secs2time(epoch_time):
@@ -265,7 +266,14 @@ def reset_weight_copy(model):
                 del module.WQ.weight_old
             module.WQ.weight_old = None
 
-def train_profit(train_loader, net, net_t, criterion, optimizer, epoch, metric_map={}, logger=None):
+def lasso_thre(var, thre=1.0):
+    thre = torch.tensor(thre).cuda()
+
+    a = var.pow(2).pow(1/2)
+    p = torch.max(a, thre)  # penalize or not
+    return p
+
+def train_profit(train_loader, net, net_t, criterion, optimizer, epoch, metric_map={}, logger=None, lasso=True):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()

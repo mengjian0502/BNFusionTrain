@@ -15,12 +15,12 @@ import numpy as np
 import torch.nn.init as init
 from collections import OrderedDict
 
+
 class WeightQuant(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, scale):
         output_int = input.mul(scale[:,None,None,None]).round()
         output_float = output_int.div(scale[:,None,None,None])
-
         return output_float
 
     @staticmethod
@@ -31,6 +31,8 @@ class RoundQuant(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, scale):
         output_int = input.mul(scale).round_()
+        # if scale > 15:
+        #     print(f"INT param: {output_int}")
         output_float = output_int.div_(scale)
         return output_float
 
@@ -94,6 +96,7 @@ class WQPROFIT(nn.Module):
     def __init__(self, wbit=32, num_features=None, channel_wise=False):
         super(WQPROFIT, self).__init__()
         self.wbit = wbit
+        self.pbit = 8
         self.num_features = num_features
         self.channel_wise = channel_wise
         self.weight_old = None
@@ -123,8 +126,19 @@ class WQPROFIT(nn.Module):
             a = F.softplus(self.a)  # keep the learnable value positive
             c = F.softplus(self.c)
 
+            if a.abs().max() > 1:
+                a = F.sigmoid(a)        # constraint the range between 0, 1
+            if c.abs().max() > 1:
+                c = F.sigmoid(c)        # constraint the range between 0, 1
             
-            if self.channel_wise:
+            # learnable parameter quantization: 
+            a = RoundQuant.apply(a, 2**self.pbit)
+            c = RoundQuant.apply(c, 2**self.pbit)
+
+            print(f"WQ.a = {a.abs().max()}")
+            print(f"WQ.c = {c.abs().max()}")
+
+            if self.channel_wise==1:
                 input = input.div(a[:, None, None, None])
                 input = F.hardtanh(input, -1, 1)
 
@@ -193,6 +207,8 @@ class AQPROFIT(nn.Module):
     def __init__(self, abit=32):
         super(AQPROFIT, self).__init__()
         self.abit = abit
+        self.pbit = 8
+
         self.a = nn.Parameter(torch.tensor(1.))
         self.c = nn.Parameter(torch.tensor(1.))
 
@@ -212,14 +228,27 @@ class AQPROFIT(nn.Module):
             if input.size(1) > 3:
                 n_lv = 2**self.abit
                 scale = n_lv - 1
-            
-                a = F.softplus(self.a)
+
+                # gradient friendly
+                a = F.softplus(self.a)  # keep the learnable value positive
                 c = F.softplus(self.c)
 
+                if a.data > 1:
+                    a = F.sigmoid(a)        # constraint the range between 0, 1
+                if c.data > 1:
+                    c = F.sigmoid(c)        # constraint the range between 0, 1
+
+                # learnable parameter quantization: 
+                a = RoundQuant.apply(a, 2**self.pbit)
+                c = RoundQuant.apply(c, 2**self.pbit)
+
+                print(f"AQ.a = {a.data.item()}")
+                print(f"AQ.c = {c.data.item()}")
+                print("=======================")
+                
                 input = F.hardtanh(input / a, 0, 1)
                 input_q = RoundQuant.apply(input, scale)
                 input_q = input_q * c
-                # import pdb;pdb.set_trace()
             else:
                 input_q = input
         return input_q
@@ -419,6 +448,12 @@ class QLinear(nn.Linear):
     def forward(self, input):
         weight_q = self.WQ(self.weight)
         input_q = self.AQ(input)
+
+        # import pdb;pdb.set_trace()
+        # print(f"WQ.a = {self.WQ.a.data.item()}")
+        # print(f"WQ.c = {self.WQ.c.data.item()}")
+        # print(f"AQ.a = {self.AQ.a.data.item()}")
+        # print(f"AQ.c = {self.AQ.c.data.item()}")
 
         out = F.linear(input_q, weight_q, self.bias)
         return out
