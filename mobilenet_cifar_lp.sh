@@ -19,10 +19,10 @@ wd=0.00004
 lr=0.005
 
 save_path="./save/${model}/${model}_lr${lr}_wd${wd}_PROFIT_channelwise${channel_wise}_Qparam8bit/"
-log_file="${model}_lr${lr}_wd${wd}_eval.log"
+log_file="${model}_lr${lr}_wd${wd}_check.log"
 
-# pretrained_model="./pretrained/MaskedMobileNetV1_cifar_FP_cifar10/model_best.pth"
-pretrained_model="./save/mobilenetv1_Q/mobilenetv1_Q_lr0.005_wd0.00004_PROFIT_channelwise1_Qparam8bit/checkpoint_w4_a4_ft3.pth.tar"
+pretrained_model="./pretrained/MaskedMobileNetV1_cifar_FP_cifar10/model_best.pth"
+# pretrained_model="./save/mobilenetv1_Q/mobilenetv1_Q_lr0.005_wd0.00004_PROFIT_channelwise1_Qparam8bit/checkpoint_w4_a4_ft3.pth.tar"
 
 $PYTHON -W ignore train_profit.py --dataset ${dataset} \
     --data_path ./dataset/ \
@@ -41,7 +41,8 @@ $PYTHON -W ignore train_profit.py --dataset ${dataset} \
     --fine_tune \
     --stabilize \
     --teacher self \
-    --evaluate
+    # --bn_fuse \
+    # --evaluate
     
     
 

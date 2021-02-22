@@ -18,6 +18,7 @@ import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
 import seaborn as sns
 from functools import partial
+from models import QConvBN2d
 _print_freq = 50
 
 
@@ -142,7 +143,7 @@ def test(testloader, net, criterion, epoch):
 
             batch_time.update(time.time() - end)
             end = time.time()
-            break
+            # break
     return top1.avg, losses.avg
 
 def convert_secs2time(epoch_time):
@@ -426,6 +427,54 @@ def init_precision(model, loader, abit, wbit, set_a=False, set_w=False, eps=0.05
     model.cuda()
     for hook in hooks:
         hook.remove()
+
+def bn_merge(model):
+    r"""
+    Fuse the batchnorm to the weight given a pretrained model
+    """
+    for module_name in model._modules:
+        block = model._modules[module_name]
+        if not isinstance(block, nn.Sequential):
+            # import pdb;pdb.set_trace()
+            model._modules[module_name] = block
+            continue
+        else:
+            stack = []
+            for m in block.children():
+                sub_module = []
+                for n in m.children():
+                    if isinstance(n, nn.BatchNorm2d):
+                        if isinstance(sub_module[-1], QConvBN2d):
+                            bn_st_dict = n.state_dict()
+                            conv_st_dict = sub_module[-1].state_dict()
+                            # batchnorm parameters
+                            eps = n.eps
+                            mu = bn_st_dict['running_mean']
+                            var = bn_st_dict['running_var']
+                            gamma = bn_st_dict['weight']
+                            nb_tr = bn_st_dict['num_batches_tracked']
+
+                            if 'bias' in bn_st_dict:
+                                beta = bn_st_dict['bias']
+                            else:
+                                beta = torch.zeros(gamma.size(0)).float().to(gamma.device)
+                            
+                            sub_module[-1].gamma.data = gamma
+                            sub_module[-1].beta.data = beta
+                            sub_module[-1].running_mean.data = mu
+                            sub_module[-1].running_var.data = var
+                            sub_module[-1].num_batches_tracked.data = nb_tr
+                            sub_module[-1].eps = eps
+                            # import pdb;pdb.set_trace()
+                    else:
+                        sub_module.append(n)
+                seq_module = nn.Sequential(*sub_module)    
+                stack.append(seq_module)
+            seq_stack = nn.Sequential(*stack)
+            
+            model._modules[module_name] = seq_stack
+    # import pdb;pdb.set_trace()
+    return model
 
 def set_precision(model, abit=32, wbit=32, set_a=False, set_w=False):
     for name, module in model.named_modules():

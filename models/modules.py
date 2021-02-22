@@ -126,17 +126,17 @@ class WQPROFIT(nn.Module):
             a = F.softplus(self.a)  # keep the learnable value positive
             c = F.softplus(self.c)
 
-            if a.abs().max() > 1:
-                a = F.sigmoid(a)        # constraint the range between 0, 1
-            if c.abs().max() > 1:
-                c = F.sigmoid(c)        # constraint the range between 0, 1
+            # if a.abs().max() > 1:
+            #     a = F.sigmoid(a)        # constraint the range between 0, 1
+            # if c.abs().max() > 1:
+            #     c = F.sigmoid(c)        # constraint the range between 0, 1
             
-            # learnable parameter quantization: 
-            a = RoundQuant.apply(a, 2**self.pbit)
-            c = RoundQuant.apply(c, 2**self.pbit)
+            # # learnable parameter quantization: 
+            # a = RoundQuant.apply(a, 2**self.pbit)
+            # c = RoundQuant.apply(c, 2**self.pbit)
 
-            print(f"WQ.a = {a.abs().max()}")
-            print(f"WQ.c = {c.abs().max()}")
+            # print(f"WQ.a = {a.abs().max()}")
+            # print(f"WQ.c = {c.abs().max()}")
 
             if self.channel_wise==1:
                 input = input.div(a[:, None, None, None])
@@ -233,18 +233,18 @@ class AQPROFIT(nn.Module):
                 a = F.softplus(self.a)  # keep the learnable value positive
                 c = F.softplus(self.c)
 
-                if a.data > 1:
-                    a = F.sigmoid(a)        # constraint the range between 0, 1
-                if c.data > 1:
-                    c = F.sigmoid(c)        # constraint the range between 0, 1
+                # if a.data > 1:
+                #     a = F.sigmoid(a)        # constraint the range between 0, 1
+                # if c.data > 1:
+                #     c = F.sigmoid(c)        # constraint the range between 0, 1
 
-                # learnable parameter quantization: 
-                a = RoundQuant.apply(a, 2**self.pbit)
-                c = RoundQuant.apply(c, 2**self.pbit)
+                # # learnable parameter quantization: 
+                # a = RoundQuant.apply(a, 2**self.pbit)
+                # c = RoundQuant.apply(c, 2**self.pbit)
 
-                print(f"AQ.a = {a.data.item()}")
-                print(f"AQ.c = {c.data.item()}")
-                print("=======================")
+                # print(f"AQ.a = {a.data.item()}")
+                # print(f"AQ.c = {c.data.item()}")
+                # print("=======================")
                 
                 input = F.hardtanh(input / a, 0, 1)
                 input_q = RoundQuant.apply(input, scale)
@@ -341,11 +341,14 @@ class QConvBN2d(ConvBN2d):
         # precisions
         self.wbit = wbit
         self.abit = abit
-        channels = self.weight.data.size(0) 
+        num_features = self.weight.data.size(0) 
 
         # quantizers
-        self.WQ = WQ(wbit=wbit, num_features=channels, channel_wise=channel_wise)
-        self.AQ = AQ(abit=abit, num_features=channels, alpha_init=alpha_init)
+        self.WQ = WQPROFIT(wbit=wbit, num_features=num_features, channel_wise=channel_wise)
+        self.AQ = AQPROFIT(abit)
+
+        # mask
+        self.register_buffer("mask", torch.ones(self.weight.data.size()))
 
 
     def forward(self, input):
@@ -369,16 +372,23 @@ class QConvBN2d(ConvBN2d):
         running_mean = self.running_mean
         running_var = self.running_var
         running_std = torch.sqrt(running_var + self.eps)
-
+        
+        # import pdb;pdb.set_trace()
+        
         bn_scale = self.gamma / running_std
-        bias = self.beta -  self.gamma * running_mean / running_std
+        bias = self.beta - self.gamma * running_mean / running_std
         bn_bias = bias.reshape(-1)
         
-        # merge the BN weight to the weight
+        # merge the BN weight to the weight (channel-wise weight quant -> channel wise bn merge)
+        # weight = self.weight.clone()
+        # weight_q = self.WQ(weight)
+        # weight_q = weight_q * bn_scale[:, None, None, None]
+        # input_q = self.AQ(input)
+
+        # merge the BN weight to the weight(channel wise bn merge -> layerwise/channelwise quant)
         weight = self.weight * bn_scale[:, None, None, None]
         weight_q = self.WQ(weight)
         input_q = self.AQ(input)
-        
         # convolution
         out = F.conv2d(input_q, weight_q, bn_bias, self.stride, self.padding, self.dilation, self.groups)
 

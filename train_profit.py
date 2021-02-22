@@ -35,6 +35,7 @@ from collections import OrderedDict
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10/ImageNet Training')
 parser.add_argument('--model', type=str, help='model type')
+parser.add_argument('--model_t', type=str, help='teacher model type')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--momentum', type=float, default=0.9, help='Momentum.')
 parser.add_argument('--epochs', type=int, default=200, help='Number of epochs to train.')
@@ -71,7 +72,7 @@ parser.add_argument('--fine_tune', dest='fine_tune', action='store_true',
 parser.add_argument('--resume', default='', type=str, help='path of the pretrained model')
 
 # quantization
-parser.add_argument("--teacher", choices=["none", "self", "resnet18"])
+parser.add_argument("--teacher", choices=["none", "self", "mobilenet_v1", "resnet18"])
 parser.add_argument("--warmup", default=3, type=int)
 parser.add_argument("--bn_epoch", default=5, type=int)
 parser.add_argument("--ft_epoch", default=15, type=int)
@@ -84,6 +85,9 @@ parser.add_argument("--w_bit", required=True, type=int, nargs="+")
 parser.add_argument("--a_bit", required=True, type=int, nargs="+")
 parser.add_argument("--w_profit", required=True, type=int, nargs="+")
 parser.add_argument('--channel_wise', type=int, default=0, help='channel_wise quantization flag')
+
+# bn fuse
+parser.add_argument('--bn_fuse', action='store_true', help='fuse the model')
 
 args = parser.parse_args()
 args.use_cuda = torch.cuda.is_available()
@@ -173,7 +177,7 @@ def main():
         logger.info("=> loading checkpoint '{}'".format(args.resume))
         checkpoint = torch.load(args.resume)
         for k, v in checkpoint['state_dict'].items():
-            name = k[7:]
+            name = k
             new_state_dict[name] = v
         
         state_tmp = net.state_dict()
@@ -190,11 +194,26 @@ def main():
         net_t = None
     elif args.teacher == "self":
         net_t = copy.deepcopy(net)
+    elif args.teacher == "mobilenet_v1":
+        model_t_cfg = getattr(models, args.model_t)
+        model_t_cfg.kwargs.update({"num_classes": num_classes, "wbit": 32, "abit":32, "channel_wise":args.channel_wise})
+        net_t = model_t_cfg.base(*model_cfg.args, **model_cfg.kwargs) 
+
+        state_t = net_t.state_dict()
+        state_t.update(new_state_dict)
+
+        net_t.load_state_dict(state_t)
+        logger.info("=> loaded checkpoint for teacher model'{}'".format(args.resume))
     else:
         raise NotImplementedError
 
     logger.info(net)
     start_epoch = 0
+
+    if args.bn_fuse:
+        net = bn_merge(net)
+        logger.info("Fused model...")
+        logger.info(net)
 
     if args.use_cuda:
         net = net.cuda()
