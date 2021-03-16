@@ -19,7 +19,10 @@ from collections import OrderedDict
 class WeightQuant(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, scale):
+        ub = 6
+        lb = -3
         output_int = input.mul(scale[:,None,None,None]).round()
+        output_int = output_int.clamp(lb, ub)                       # layer-wise clamp
         output_float = output_int.div(scale[:,None,None,None])
         return output_float
 
@@ -31,14 +34,36 @@ class RoundQuant(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, scale):
         output_int = input.mul(scale).round_()
-        # if scale > 15:
-        #     print(f"INT param: {output_int}")
+        print("act_int:{}".format(output_int.unique().cpu().numpy()))
         output_float = output_int.div_(scale)
         return output_float
 
     @staticmethod
     def backward(ctx, grad_output):
         return grad_output, None
+
+class RoundQuantClamp(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input, scale):
+        ub = 6
+        lb = -3
+        output_int = input.mul(scale).round_()
+        output_int = output_int.clamp(lb, ub)       # layer-wise clamp
+        print("weight_int:{}".format(output_int.unique().cpu().numpy()))
+        output_float = output_int.div_(scale)
+        return output_float
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output, None
+
+def roundquantclamp(input, scale):
+    ub = 6
+    lb = -3
+    output_int = input.mul(scale).round_()
+    output_int = output_int.clamp(lb, ub)       # layer-wise clamp
+    output_float = output_int.div(scale)
+    return output_int, output_float, scale
 
 
 class WQ(nn.Module):
@@ -69,18 +94,18 @@ class WQ(nn.Module):
 
             # channel-wise clamp
             input = torch.max(torch.min(input, ub[:,None,None,None]), lb[:,None,None,None])
-            scale = n_lv / self.alpha_w
+            self.scale = n_lv / self.alpha_w
 
-            w_float = WeightQuant.apply(input, scale)
+            w_float = WeightQuant.apply(input, self.scale)
         else:
             m = input.abs().mean()
             std = input.std()
             
             self.alpha_w = 1/z[0] * std - z[1]/z[0] * m 
             input = input.clamp(-self.alpha_w.item(), self.alpha_w.item())
-            scale = n_lv / self.alpha_w
+            self.scale = n_lv / self.alpha_w
 
-            w_float = RoundQuant.apply(input, scale)
+            w_float = RoundQuant.apply(input, self.scale)
         return w_float
     
     def extra_repr(self):
@@ -422,9 +447,11 @@ class QConv2d(nn.Conv2d):
         self.wbit = wbit
         num_features = self.weight.data.size(0)
 
-        self.WQ = WQPROFIT(wbit=wbit, num_features=num_features, channel_wise=channel_wise)
-        self.AQ = AQPROFIT(abit)
-
+        # self.WQ = WQPROFIT(wbit=wbit, num_features=num_features, channel_wise=channel_wise)
+        # self.AQ = AQPROFIT(abit)
+        self.WQ = WQ(wbit=wbit, num_features=num_features, channel_wise=channel_wise)
+        self.AQ = AQ(abit=abit, num_features=num_features, alpha_init=10.0)
+        
         # mask
         self.register_buffer("mask", torch.ones(self.weight.data.size()))
 
@@ -449,8 +476,10 @@ class QLinear(nn.Linear):
         channels = self.weight.data.size(0)
 
         # quantizers
-        self.WQ = WQPROFIT(wbit=wbit, num_features=channels, channel_wise=0)
-        self.AQ = AQPROFIT(abit=abit)
+        # self.WQ = WQPROFIT(wbit=wbit, num_features=channels, channel_wise=0)
+        # self.AQ = AQPROFIT(abit=abit)
+        self.WQ = WQ(wbit=wbit, num_features=channels, channel_wise=0)
+        self.AQ = AQ(abit=abit, num_features=channels, alpha_init=alpha_init)
 
         # mask
         self.register_buffer("mask", torch.ones(self.weight.data.size()))
@@ -469,3 +498,78 @@ class QLinear(nn.Linear):
         return out
 
 
+"""
+Get column-wise MAC
+"""
+class ColQConv2d(nn.Conv2d):
+    def __init__(
+        self, 
+        in_channels, 
+        out_channels, 
+        kernel_size, 
+        stride=1, 
+        padding=0, 
+        dilation=1, 
+        groups=1, 
+        bias=False, 
+        wbit=32, 
+        abit=32, 
+        channel_wise=0
+    ):
+        super(ColQConv2d, self).__init__(
+            in_channels, out_channels, kernel_size, stride, padding, dilation, 
+            groups, bias
+        )
+
+        self.layer_idx=0
+        
+        # precisions
+        self.abit = abit
+        self.wbit = wbit
+        num_features = self.weight.data.size(0)
+
+        # self.WQ = WQPROFIT(wbit=wbit, num_features=num_features, channel_wise=channel_wise)
+        # self.AQ = AQPROFIT(abit)
+        self.WQ = WQ(wbit=wbit, num_features=num_features, channel_wise=channel_wise)
+        self.AQ = AQ(abit=abit, num_features=num_features, alpha_init=10.0)
+        
+        # mask
+        self.register_buffer("mask", torch.ones(self.weight.data.size()))
+
+    def forward(self, input):
+        weight_q = self.WQ(self.weight)
+        input_q = self.AQ(input)
+        out_original = F.conv2d(input_q, weight_q, self.bias, self.stride, self.padding, self.dilation, self.groups)
+
+        # inference only
+        scale_w = self.WQ.scale
+        weight_int, weight_float, _ = roundquantclamp(self.weight, scale_w)
+        c_out, c_in, h, w = weight_int.size()
+        
+        target_samples = 10000
+        save_mac = False
+        mac64 = torch.tensor([]).cuda()
+        output = torch.zeros_like(out_original)
+        for i in range(c_out):
+            channel_out = torch.zeros_like(out_original)
+            for k in range(h):
+                for m in range(w):
+                    mask = torch.zeros_like(weight_int)
+                    mask[i, :, k, m] = 1.
+                    weight_m = weight_int * mask     # input channel
+                    partial = F.conv2d(input_q, weight_m, self.bias, self.stride, self.padding, self.dilation, self.groups)         
+                    channel_out += partial
+                    
+                    # save mac values
+                    if len(mac64) < target_samples:
+                        mac_matrix = partial[:,i,:,:].reshape(-1)
+                        mac64 = torch.cat((mac64, mac_matrix))  
+                    else:
+                        continue
+            output += channel_out
+        output = output.div(scale_w)
+        
+        if save_mac:
+            # torch.save(mac64, './mac{}_{}x{}x{}x{}_nonclamp.pt'.format(c_in, c_out, c_in, h, w))
+            torch.save(weight_int, './weight_int/weight_q{}_clamp.pt'.format(self.layer_idx))
+        return output

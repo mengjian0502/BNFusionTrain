@@ -8,7 +8,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torchvision
 from torch.utils.data import DataLoader
 from torchvision import datasets
 import torchvision.transforms as transforms
@@ -109,10 +108,10 @@ def main():
             transforms.Normalize(mean, std)
         ])
 
-        trainset = torchvision.datasets.CIFAR10(root=args.data_path, train=True, download=True, transform=train_transform)
+        trainset = datasets.CIFAR10(root=args.data_path, train=True, download=True, transform=train_transform)
         trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=2)
 
-        testset = torchvision.datasets.CIFAR10(root=args.data_path, train=False, download=True, transform=test_transform)
+        testset = datasets.CIFAR10(root=args.data_path, train=False, download=True, transform=test_transform)
         testloader = torch.utils.data.DataLoader(testset, batch_size=args.batch_size, shuffle=False, num_workers=2)
         num_classes = 10
     elif args.dataset == 'imagenet':
@@ -135,8 +134,8 @@ def main():
         train_dir = os.path.join(args.data_path, 'train')
         test_dir = os.path.join(args.data_path, 'val')
 
-        train_data = torchvision.datasets.ImageFolder(train_dir, transform=train_transform)
-        test_data = torchvision.datasets.ImageFolder(test_dir, transform=test_transform)
+        train_data = datasets.ImageFolder(train_dir, transform=train_transform)
+        test_data = datasets.ImageFolder(test_dir, transform=test_transform)
 
         trainloader = torch.utils.data.DataLoader(train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True)
         testloader = torch.utils.data.DataLoader(test_data, batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=True)
@@ -191,10 +190,11 @@ def main():
     # Evaluate
     if args.evaluate:
         # model structure
+        count = 0
         for name, module in net.named_modules():
-            if "WQ" in name:
-                print(module.wbit)
-
+            if isinstance(module, nn.Conv2d) and module.weight.size(2)>1:
+                module.layer_idx = count
+                count += 1
         test_acc, val_loss = test(testloader, net, criterion, 0)
         logger.info(f'Test accuracy: {test_acc}')
         exit()

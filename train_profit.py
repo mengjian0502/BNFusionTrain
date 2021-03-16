@@ -160,7 +160,7 @@ def main():
         testloader = torch.utils.data.DataLoader(test_data, batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=True)
         num_classes = 1000
     else:
-        raise ValueError("Dataset must be either cifar10 or imagenet_1k")  
+        raise ValueError("Dataset must be either cifar10 or imagenet")  
 
     # Prepare the model
     logger.info('==> Building model..\n')

@@ -1,4 +1,4 @@
-PYTHON="/home/mengjian/anaconda3/envs/neurosim_test/bin/python3"
+PYTHON="/home/mengjian/anaconda3/envs/myenv_pc/bin/python"
 
 ############ directory to save result #############
 
@@ -20,12 +20,13 @@ abit=4
 wd=0.0005
 lr=0.1
 
-save_path="./save/${model}/${model}_lr${lr}_wd${wd}_QReLU_021421/"
-log_file="${model}_lr${lr}_wd${wd}_eval.log"
+save_path="./save/${model}/${model}_lr${lr}_wd${wd}_channelwise${channel_wise}Clamp_ub6lb-3_031121/"
+log_file="${model}_lr${lr}_wd${wd}_nonclamp_eval.log"
 
 # pretrained_model="./save/resnet20_Quant/resnet20_Quant_lr0.1_wd0.0005_QReLU/model_best.pth.tar"
 # pretrained_model="./save/resnet20_QF/resnet20_QF_lr0.1_wd0.0005_QReLU_channelwiseFalse_021021/model_best.pth.tar"
-pretrained_model="./save/resnet20_Q/resnet20_Q_lr0.1_wd0.0005_QReLU_021421/model_best.pth.tar"
+pretrained_model="./save/resnet20_Q/resnet20_Q_lr0.1_wd0.0005_Clamp_ub6lb-3_031121/model_best.pth.tar"
+# pretrained_model="./save/resnet20_Q/resnet20_Q_lr0.1_wd0.0005_QReLU_021421/model_best.pth.tar"
 
 $PYTHON -W ignore train.py --dataset ${dataset} \
     --data_path ./dataset/ \
