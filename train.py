@@ -3,20 +3,22 @@ model training
 """
 
 import argparse
+from models.modules import QConv2d, WQPROFIT
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torchvision import datasets
 import torchvision.transforms as transforms
 import os
 import time
 import sys
 import models
 import logging
+import torch.utils.model_zoo as model_zoo
 from torchsummary import summary
+from torchvision import datasets
 
 from utils import *
 from collections import OrderedDict
@@ -56,6 +58,8 @@ parser.add_argument('--workers', type=int, default=16,help='number of data loadi
 # Fine-tuning
 parser.add_argument('--fine_tune', dest='fine_tune', action='store_true',
                     help='fine tuning from the pre-trained model, force the start epoch be zero')
+parser.add_argument('--pretrained', dest='pretrained', action='store_true',
+                    help='full pre-trained model')
 parser.add_argument('--resume', default='', type=str, help='path of the pretrained model')
 
 # quantization
@@ -153,29 +157,39 @@ def main():
     start_epoch = 0
     
     if args.fine_tune:
+        if not args.resume is '':
+            checkpoint = torch.load(args.resume)
+            checkpoint = checkpoint['state_dict']
+        elif args.pretrained is not None:
+            checkpoint = model_zoo.load_url(models.model_urls[str(args.model)])
+        
         new_state_dict = OrderedDict()
-        logger.info("=> loading checkpoint '{}'".format(args.resume))
-        checkpoint = torch.load(args.resume)
-        for k, v in checkpoint['state_dict'].items():
+        logger.info("=> loading checkpoint...")
+        
+        for k, v in checkpoint.items():
             name = k
             new_state_dict[name] = v
         
         state_tmp = net.state_dict()
-
-        if 'state_dict' in checkpoint.keys():
-            state_tmp.update(new_state_dict)
-        
-            net.load_state_dict(state_tmp)
-            logger.info("=> loaded checkpoint '{} | Acc={}'".format(args.resume, checkpoint['acc']))
-        else:
-            raise ValueError('no state_dict found')  
+        state_tmp.update(new_state_dict)
+    
+        net.load_state_dict(state_tmp)
+        logger.info("=> loaded checkpoint!")
+    
+    # Initialize (PROFIT / RCF)
+    
 
     if args.use_cuda:
-        if args.ngpu > 1:
-            net = torch.nn.DataParallel(net)
+        net = net.cuda()
+
+    init_precision(net, trainloader, args.abit, args.wbit, set_a=True, set_w=True)
+    logger.info("Quantizer initialized!")
+    
+    if args.ngpu > 1:
+        net = torch.nn.DataParallel(net)
+        logger.info("Data Parallel!")
 
     # Loss function
-    net = net.cuda()
     criterion = nn.CrossEntropyLoss().cuda()
     
     model_params = []
@@ -198,12 +212,12 @@ def main():
         test_acc, val_loss = test(testloader, net, criterion, 0)
         logger.info(f'Test accuracy: {test_acc}')
         exit()
-    
+
     # Training
     start_time = time.time()
     epoch_time = AverageMeter()
     best_acc = 0.
-    columns = ['ep', 'lr', 'tr_loss', 'tr_acc', 'tr_time', 'te_loss', 'te_acc', 'best_acc', 'need_time']
+    columns = ['ep', 'lr', 'tr_loss', 'tr_acc', 'tr_time', 'te_loss', 'te_acc', 'best_acc']
 
     for epoch in range(start_epoch, start_epoch+args.epochs):
         need_hour, need_mins, need_secs = convert_secs2time(
@@ -240,9 +254,10 @@ def main():
         start_time = time.time()
         
         values = [epoch + 1, optimizer.param_groups[0]['lr'], train_results['loss'], train_results['acc'], 
-            e_time, val_loss, test_acc, best_acc, need_time]
+            e_time, val_loss, test_acc, best_acc]
 
         print_table(values, columns, epoch, logger)
+        print(need_time)
 
 if __name__ == '__main__':
     main()

@@ -33,8 +33,7 @@ class WeightQuant(torch.autograd.Function):
 class RoundQuant(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, scale):
-        output_int = input.mul(scale).round_()
-        print("act_int:{}".format(output_int.unique().cpu().numpy()))
+        output_int = input.mul(scale).round()
         output_float = output_int.div_(scale)
         return output_float
 
@@ -151,18 +150,6 @@ class WQPROFIT(nn.Module):
             a = F.softplus(self.a)  # keep the learnable value positive
             c = F.softplus(self.c)
 
-            # if a.abs().max() > 1:
-            #     a = F.sigmoid(a)        # constraint the range between 0, 1
-            # if c.abs().max() > 1:
-            #     c = F.sigmoid(c)        # constraint the range between 0, 1
-            
-            # # learnable parameter quantization: 
-            # a = RoundQuant.apply(a, 2**self.pbit)
-            # c = RoundQuant.apply(c, 2**self.pbit)
-
-            # print(f"WQ.a = {a.abs().max()}")
-            # print(f"WQ.c = {c.abs().max()}")
-
             if self.channel_wise==1:
                 input = input.div(a[:, None, None, None])
                 input = F.hardtanh(input, -1, 1)
@@ -257,19 +244,6 @@ class AQPROFIT(nn.Module):
                 # gradient friendly
                 a = F.softplus(self.a)  # keep the learnable value positive
                 c = F.softplus(self.c)
-
-                # if a.data > 1:
-                #     a = F.sigmoid(a)        # constraint the range between 0, 1
-                # if c.data > 1:
-                #     c = F.sigmoid(c)        # constraint the range between 0, 1
-
-                # # learnable parameter quantization: 
-                # a = RoundQuant.apply(a, 2**self.pbit)
-                # c = RoundQuant.apply(c, 2**self.pbit)
-
-                # print(f"AQ.a = {a.data.item()}")
-                # print(f"AQ.c = {c.data.item()}")
-                # print("=======================")
                 
                 input = F.hardtanh(input / a, 0, 1)
                 input_q = RoundQuant.apply(input, scale)
@@ -447,10 +421,10 @@ class QConv2d(nn.Conv2d):
         self.wbit = wbit
         num_features = self.weight.data.size(0)
 
-        # self.WQ = WQPROFIT(wbit=wbit, num_features=num_features, channel_wise=channel_wise)
-        # self.AQ = AQPROFIT(abit)
-        self.WQ = WQ(wbit=wbit, num_features=num_features, channel_wise=channel_wise)
-        self.AQ = AQ(abit=abit, num_features=num_features, alpha_init=10.0)
+        self.WQ = WQPROFIT(wbit=wbit, num_features=num_features, channel_wise=channel_wise)
+        self.AQ = AQPROFIT(abit)
+        # self.WQ = WQ(wbit=wbit, num_features=num_features, channel_wise=channel_wise)
+        # self.AQ = AQ(abit=abit, num_features=num_features, alpha_init=10.0)
         
         # mask
         self.register_buffer("mask", torch.ones(self.weight.data.size()))
@@ -476,10 +450,10 @@ class QLinear(nn.Linear):
         channels = self.weight.data.size(0)
 
         # quantizers
-        # self.WQ = WQPROFIT(wbit=wbit, num_features=channels, channel_wise=0)
-        # self.AQ = AQPROFIT(abit=abit)
-        self.WQ = WQ(wbit=wbit, num_features=channels, channel_wise=0)
-        self.AQ = AQ(abit=abit, num_features=channels, alpha_init=alpha_init)
+        self.WQ = WQPROFIT(wbit=wbit, num_features=channels, channel_wise=0)
+        self.AQ = AQPROFIT(abit=abit)
+        # self.WQ = WQ(wbit=wbit, num_features=channels, channel_wise=0)
+        # self.AQ = AQ(abit=abit, num_features=channels, alpha_init=alpha_init)
 
         # mask
         self.register_buffer("mask", torch.ones(self.weight.data.size()))
@@ -487,12 +461,6 @@ class QLinear(nn.Linear):
     def forward(self, input):
         weight_q = self.WQ(self.weight)
         input_q = self.AQ(input)
-
-        # import pdb;pdb.set_trace()
-        # print(f"WQ.a = {self.WQ.a.data.item()}")
-        # print(f"WQ.c = {self.WQ.c.data.item()}")
-        # print(f"AQ.a = {self.AQ.a.data.item()}")
-        # print(f"AQ.c = {self.AQ.c.data.item()}")
 
         out = F.linear(input_q, weight_q, self.bias)
         return out
