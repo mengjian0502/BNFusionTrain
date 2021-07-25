@@ -80,7 +80,7 @@ def get_loader(args):
         ])
         
         train_dir = os.path.join(args.data_path, 'train')
-        test_dir = os.path.join(args.data_path, 'val')
+        test_dir = os.path.join(args.data_path, 'test')
 
         train_data = datasets.ImageFolder(train_dir, transform=train_transform)
         test_data = datasets.ImageFolder(test_dir, transform=test_transform)

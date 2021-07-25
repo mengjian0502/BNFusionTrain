@@ -97,40 +97,10 @@ def main():
 
     # Prepare the model
     logger.info('==> Building model..\n')
-    model_cfg = getattr(models, args.model)
-    model_cfg.kwargs.update({"num_classes": num_classes, "wbit": args.wbit, "abit":args.abit, "channel_wise":args.channel_wise})
-    net = model_cfg.base(*model_cfg.args, **model_cfg.kwargs) 
-    
+    net = torchvision.models.resnet50(pretrained=True)
+    net.fc = nn.Linear(2048, num_classes)
+
     logger.info(net)
-
-    # init_precision(net, trainloader, args.abit, args.wbit, set_a=True, set_w=True)
-    # logger.info("Quantizer initialized!")
-    
-    if args.fine_tune:
-        if not args.resume is '':
-            checkpoint = torch.load(args.resume)
-            checkpoint = checkpoint['state_dict']
-        elif args.pretrained:
-            checkpoint = model_zoo.load_url(models.model_urls[str(args.model)])
-        
-        new_state_dict = OrderedDict()
-        logger.info("=> loading checkpoint...")
-        
-        for k, v in checkpoint.items():
-            name = k[7:]
-            if 'fc' in k:
-                if num_classes == 1000:
-                    new_state_dict[name] = v
-                else:
-                    logger.info("=> load backbone only!")
-            else:
-                new_state_dict[name] = v
-        
-        state_tmp = net.state_dict()
-        state_tmp.update(new_state_dict)
-
-        net.load_state_dict(state_tmp)
-        logger.info("=> loaded checkpoint!")
     
     if args.use_cuda:
         net = net.cuda()

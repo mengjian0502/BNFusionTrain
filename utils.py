@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from functools import partial
 from models import QConvBN2d
+import models
 _print_freq = 50
 
 
@@ -77,7 +78,7 @@ def train(trainloader, net, criterion, optimizer, epoch, args):
         targets = targets.cuda(non_blocking=True)
         inputs = inputs.cuda()
         outputs = net(inputs)
-
+        
         loss = criterion(outputs, targets)
 
         if args.clp:
@@ -93,9 +94,16 @@ def train(trainloader, net, criterion, optimizer, epoch, args):
 
         optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
 
-        # import pdb;pdb.set_trace()
+        
+        for module in net.modules():
+            if 'BatchNorm' in str(type(module)):
+                if module.weight.grad is not None:
+                    module.weight.grad.data.fill_(0)
+                if module.bias.grad is not None:
+                    module.bias.grad.data.fill_(0)
+
+        optimizer.step()
 
         prec1, prec5 = accuracy(outputs.data, targets, topk=(1, 5))
         losses.update(loss.item(), inputs.size(0))
@@ -104,6 +112,8 @@ def train(trainloader, net, criterion, optimizer, epoch, args):
 
         batch_time.update(time.time() - end)
         end = time.time()
+
+        # import pdb;pdb.set_trace()
 
         train_loss += loss.item()
         if args.clp:
@@ -390,7 +400,7 @@ def train_profit(train_loader, net, net_t, criterion, optimizer, epoch, metric_m
 
 def init_precision(model, loader, abit, wbit, set_a=False, set_w=False, eps=0.05):
     def init_hook(module, input, output):
-        if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear):
+        if isinstance(module, models.modules.QConv2d) or isinstance(module, models.modules.QLinear):
             if not isinstance(input, torch.Tensor):
                 input = input[0]
             input = input.detach().cpu()

@@ -430,6 +430,8 @@ class QConv2d(nn.Conv2d):
         self.register_buffer("mask", torch.ones(self.weight.data.size()))
 
     def forward(self, input):
+        # if self.weight.size(1)== 512 and self.weight.size(2) == 3:
+        #     import pdb;pdb.set_trace()
         weight_q = self.WQ(self.weight)
         input_q = self.AQ(input)
 
