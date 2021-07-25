@@ -76,8 +76,8 @@ def train(trainloader, net, criterion, optimizer, epoch, args):
         
         targets = targets.cuda(non_blocking=True)
         inputs = inputs.cuda()
-    
         outputs = net(inputs)
+
         loss = criterion(outputs, targets)
 
         if args.clp:
@@ -94,6 +94,8 @@ def train(trainloader, net, criterion, optimizer, epoch, args):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
+        # import pdb;pdb.set_trace()
 
         prec1, prec5 = accuracy(outputs.data, targets, topk=(1, 5))
         losses.update(loss.item(), inputs.size(0))
