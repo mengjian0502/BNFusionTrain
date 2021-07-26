@@ -94,14 +94,13 @@ def train(trainloader, net, criterion, optimizer, epoch, args):
 
         optimizer.zero_grad()
         loss.backward()
-
         
-        for module in net.modules():
-            if 'BatchNorm' in str(type(module)):
-                if module.weight.grad is not None:
-                    module.weight.grad.data.fill_(0)
-                if module.bias.grad is not None:
-                    module.bias.grad.data.fill_(0)
+        # for module in net.modules():
+        #     if 'BatchNorm' in str(type(module)):
+        #         if module.weight.grad is not None:
+        #             module.weight.grad.data.fill_(0)
+        #         if module.bias.grad is not None:
+        #             module.bias.grad.data.fill_(0)
 
         optimizer.step()
 

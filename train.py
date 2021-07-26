@@ -102,9 +102,6 @@ def main():
     net = model_cfg.base(*model_cfg.args, **model_cfg.kwargs) 
     
     logger.info(net)
-
-    # init_precision(net, trainloader, args.abit, args.wbit, set_a=True, set_w=True)
-    # logger.info("Quantizer initialized!")
     
     if args.fine_tune:
         if not args.resume is '':
@@ -122,7 +119,12 @@ def main():
                 if num_classes == 1000:
                     new_state_dict[name] = v
                 else:
-                    logger.info("=> load backbone only!")
+                    if "WQ" in name or "AQ" in name:
+                        # import pdb;pdb.set_trace()
+                        new_state_dict[name] = v
+                        logger.info(f"load {name}")
+                    else:
+                        logger.info(f"=> skip {name}, load backbone only!")
             else:
                 new_state_dict[name] = v
         
@@ -135,9 +137,9 @@ def main():
     if args.use_cuda:
         net = net.cuda()
 
-    # if args.resume is '':
-    #     init_precision(net, trainloader, args.abit, args.wbit, set_a=True, set_w=True)
-    #     logger.info("Quantizer initialized!")
+    if not args.fine_tune:
+        init_precision(net, trainloader, args.abit, args.wbit, set_a=True, set_w=True)
+        logger.info("Quantizer initialized!")
     
     if args.ngpu > 1:
         net = torch.nn.DataParallel(net)
@@ -154,7 +156,7 @@ def main():
         else:
             model_params += [{'params': [params]}]
 
-    optimizer = optim.SGD(model_params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     
     # Evaluate
     if args.evaluate:
