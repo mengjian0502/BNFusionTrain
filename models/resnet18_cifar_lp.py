@@ -6,7 +6,7 @@ import torch
 from torch.nn import init
 from .modules import QConv2d, QLinear
 
-__all__ = ['resnet18_tanh']
+__all__ = ['resnet18_Q']
 
 class BasicBlock(nn.Module):
     expansion = 1
@@ -72,7 +72,7 @@ class Bottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=10, wbit=4, abit=4):
+    def __init__(self, block, num_blocks, num_classes=10, wbit=4, abit=4, channel_wise=0):
         super(ResNet, self).__init__()
         self.in_planes = 64
 
@@ -108,7 +108,7 @@ class ResNet(nn.Module):
         out = self.linear(out)
         return out
 
-class resnet18_tanh:
+class resnet18_Q:
     base = ResNet
     args = list()
     kwargs = {'block': BasicBlock, 'num_blocks': [2, 2, 2, 2]}

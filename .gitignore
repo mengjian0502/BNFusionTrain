@@ -8,3 +8,5 @@ pretrained/
 *.ipynb
 *.png
 *.zip
+.ipynb_checkpoints
+*.pyc

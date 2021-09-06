@@ -3,27 +3,22 @@ model training
 """
 
 import argparse
-from models.modules import QConv2d, WQPROFIT
-
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
-import torchvision.transforms as transforms
 import os
 import time
 import sys
 import models
 import logging
 import torch.utils.model_zoo as model_zoo
-from torchsummary import summary
 from dataset import get_loader 
 
 from utils import *
 from collections import OrderedDict
 
-parser = argparse.ArgumentParser(description='PyTorch CIFAR10/ImageNet Training')
+parser = argparse.ArgumentParser(description='PyTorch CIFAR10/ImageNet Low precision training')
 parser.add_argument('--model', type=str, help='model type')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--momentum', type=float, default=0.9, help='Momentum.')
@@ -102,7 +97,7 @@ def main():
     net = model_cfg.base(*model_cfg.args, **model_cfg.kwargs) 
     
     logger.info(net)
-    
+
     if args.fine_tune:
         if not args.resume is '':
             checkpoint = torch.load(args.resume)
@@ -115,18 +110,7 @@ def main():
         
         for k, v in checkpoint.items():
             name = k[7:]
-            if 'fc' in k:
-                if num_classes == 1000:
-                    new_state_dict[name] = v
-                else:
-                    if "WQ" in name or "AQ" in name:
-                        # import pdb;pdb.set_trace()
-                        new_state_dict[name] = v
-                        logger.info(f"load {name}")
-                    else:
-                        logger.info(f"=> skip {name}, load backbone only!")
-            else:
-                new_state_dict[name] = v
+            new_state_dict[name] = v
         
         state_tmp = net.state_dict()
         state_tmp.update(new_state_dict)
@@ -137,7 +121,7 @@ def main():
     if args.use_cuda:
         net = net.cuda()
 
-    if not args.fine_tune:
+    if not args.fine_tune and "mobilenet" in args.model:
         init_precision(net, trainloader, args.abit, args.wbit, set_a=True, set_w=True)
         logger.info("Quantizer initialized!")
     
@@ -147,15 +131,6 @@ def main():
 
     # Loss function
     criterion = nn.CrossEntropyLoss().cuda()
-    
-    model_params = []
-    for name, params in net.named_parameters():
-        if 'act_alpha' in name:
-            print(name)
-            model_params += [{'params': [params], 'lr': 1e-1, 'weight_decay': 1e-4}]
-        else:
-            model_params += [{'params': [params]}]
-
     optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     
     # Evaluate

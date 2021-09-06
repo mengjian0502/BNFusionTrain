@@ -1,4 +1,4 @@
-PYTHON="/home/mengjian/anaconda3/envs/neurosim_test/bin/python3"
+PYTHON="/home/mengjian/anaconda3/envs/myenv_pc/bin/python"
 
 ############ directory to save result #############
 
@@ -12,7 +12,7 @@ dataset=cifar10
 batch_size=128
 optimizer=SGD
 
-channel_wise=1
+channel_wise=0
 w_profit=4
 
 wd=0.00004
@@ -21,8 +21,8 @@ lr=0.005
 save_path="./save/${model}/${model}_lr${lr}_wd${wd}_PROFIT_channelwise${channel_wise}_Qparam8bit/"
 log_file="${model}_lr${lr}_wd${wd}_check.log"
 
-pretrained_model="./pretrained/MaskedMobileNetV1_cifar_FP_cifar10/model_best.pth"
-# pretrained_model="./save/mobilenetv1_Q/mobilenetv1_Q_lr0.005_wd0.00004_PROFIT_channelwise1_Qparam8bit/checkpoint_w4_a4_ft3.pth.tar"
+# pretrained_model="./pretrained/MaskedMobileNetV1_cifar_FP_cifar10/model_best.pth"
+pretrained_model="./save/mobilenetv1_Q/mobilenetv1_Q_lr0.005_wd0.00004_PROFIT_channelwise0/checkpoint_w4_a4_ft3.pth.tar"
 
 $PYTHON -W ignore train_profit.py --dataset ${dataset} \
     --data_path ./dataset/ \
@@ -41,8 +41,8 @@ $PYTHON -W ignore train_profit.py --dataset ${dataset} \
     --fine_tune \
     --stabilize \
     --teacher self \
+    --evaluate
     # --bn_fuse \
-    # --evaluate
     
     
 

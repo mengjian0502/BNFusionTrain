@@ -177,8 +177,11 @@ def main():
         logger.info("=> loading checkpoint '{}'".format(args.resume))
         checkpoint = torch.load(args.resume)
         for k, v in checkpoint['state_dict'].items():
-            name = k
-            new_state_dict[name] = v
+            name = k[7:]
+            if ".a_" in name or ".c_" in name:
+                continue
+            else:
+                new_state_dict[name] = v
         
         state_tmp = net.state_dict()
 
